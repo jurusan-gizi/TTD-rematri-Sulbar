@@ -17,7 +17,7 @@ const blnLabel = b => { const [y, m] = b.split('-'); return NAMA_BULAN[+m - 1] +
 const blnPendek = b => { const [y, m] = b.split('-'); return NAMA_BULAN[+m - 1].slice(0, 3) + ' ' + y.slice(2); };
 const blnNama = b => NAMA_BULAN[+b.split('-')[1] - 1];
 const ROLE_LABEL = { prov: 'Admin Provinsi', kab: 'Admin Kabupaten/Kota', pkm: 'Petugas Gizi Puskesmas' };
-const JENJANG = ['SMP', 'MTs', 'SMA', 'SMK', 'MA', 'SLB', 'Lainnya'];
+const JENJANG = ['SMP', 'MTs', 'SMA', 'SMK', 'MA', 'MAK', 'SMTK', 'SPM Wustha', 'SPM Ulya', 'PDF Wustha', 'PDF Ulya', 'Madyama Widyalaya', 'Lainnya'];
 const pct = (a, b) => b ? Math.round(a / b * 1000) / 10 : 0;
 const byNama = (a, b) => String(a.nama).localeCompare(String(b.nama), 'id', { numeric: true });
 const fmtWaktu = iso => { if (!iso) return '-'; const d = new Date(iso); return d.toLocaleDateString('id-ID', { day: 'numeric', month: 'short', year: 'numeric' }) + ' ' + d.toLocaleTimeString('id-ID', { hour: '2-digit', minute: '2-digit' }); };
@@ -145,7 +145,7 @@ function tingkatDari(nama) {
 /* ============================ STATE ============================ */
 const TABLES = ['Desa', 'Sekolah', 'Kelas', 'Siswi', 'TTD'];
 const S = {
-  token: '', user: null, kab: [], pkm: [], taAktif: '', kalender: [], pkmId: '',
+  token: '', user: null, kab: [], pkm: [], taAktif: '', kalender: [], pkmId: '', ref: null,
   db: emptyDb(), queue: {}, lastSync: '', dataKey: '',
   syncing: false, online: navigator.onLine, ver: 0, ui: {}, wil: null, users: null
 };
@@ -156,7 +156,7 @@ function persist() {
   clearTimeout(persistTimer);
   persistTimer = setTimeout(() => {
     idb.set('state', {
-      token: S.token, user: S.user, kab: S.kab, pkm: S.pkm, taAktif: S.taAktif, kalender: S.kalender, pkmId: S.pkmId,
+      token: S.token, user: S.user, kab: S.kab, pkm: S.pkm, taAktif: S.taAktif, kalender: S.kalender, pkmId: S.pkmId, ref: S.ref,
       db: S.db, queue: S.queue, lastSync: S.lastSync, dataKey: S.dataKey, ui: S.ui
     }).catch(e => console.error(e));
   }, 250);
@@ -174,8 +174,10 @@ const pendingCount = () => Object.keys(S.queue).length;
 
 /* -------- data getters -------- */
 const live = t => Object.values(S.db[t]).filter(r => r.del !== '1');
-const desaList = () => live('Desa').sort(byNama);
-const sekolahList = desaId => live('Sekolah').filter(s => !desaId || s.desaId === desaId).sort(byNama);
+const desaList = () => live('Desa').sort((a, b) => String(a.kecamatan || '~').localeCompare(String(b.kecamatan || '~'), 'id') || byNama(a, b));
+const sekolahList = (desaId, semua) => live('Sekolah').filter(s => (!desaId || s.desaId === desaId) && (semua || s.nonaktif !== '1')).sort(byNama);
+const labelDesa = d => d ? ((d.jenis && !/^(desa|kelurahan)\s/i.test(d.nama) ? d.jenis + ' ' : '') + d.nama) : '-';
+const labelDesaKec = d => labelDesa(d) + (d && d.kecamatan ? ' · Kec. ' + d.kecamatan : '');
 const kelasList = sekolahId => live('Kelas').filter(k => k.ta === S.taAktif && (!sekolahId || k.sekolahId === sekolahId)).sort(byNama);
 const siswiList = kelasId => live('Siswi').filter(s => s.ta === S.taAktif && (!kelasId || s.kelasId === kelasId)).sort(byNama);
 const getRow = (t, id) => S.db[t][id];
@@ -211,6 +213,15 @@ function rekapSiswi(list) {
   return r;
 }
 const rekapKelas = kelasId => rekapSiswi(siswiList(kelasId));
+function itemsKecamatan() {
+  const g = {};
+  desaList().forEach(d => { const k = d.kecamatan || '(Kecamatan belum diisi)'; (g[k] = g[k] || []).push(d); });
+  return Object.keys(g).map(k => {
+    const r = rekapKosong(hitungSemua().bulan);
+    g[k].forEach(d => gabungRekap(r, rekapDesa(d.id)));
+    return { label: k.startsWith('(') ? k : 'Kecamatan ' + k, rekap: r };
+  });
+}
 const rekapSekolah = sekolahId => { const ids = new Set(kelasList(sekolahId).map(k => k.id)); return rekapSiswi(siswiList().filter(s => ids.has(s.kelasId))); };
 const rekapDesa = desaId => { const sids = new Set(sekolahList(desaId).map(s => s.id)); const kids = new Set(kelasList().filter(k => sids.has(k.sekolahId)).map(k => k.id)); return rekapSiswi(siswiList().filter(s => kids.has(s.kelasId))); };
 
@@ -281,6 +292,7 @@ async function sinkron(opts = {}) {
     const taBerubah = S.taAktif && r.taAktif !== S.taAktif;
     Object.assign(S, { user: r.user, kab: r.kab, pkm: r.pkm, taAktif: r.taAktif, kalender: r.kalender });
     if (taBerubah && !opts.retry) { S.syncing = false; S.lastSync = ''; return sinkron({ full: true, retry: true }); }
+    if (r.ref) S.ref = r.ref;
     if (r.data) {
       if (r.full) S.db = emptyDb();
       TABLES.forEach(t => (r.data[t] || []).forEach(row => {
@@ -340,7 +352,7 @@ function renderLogin(msg) {
       const ganti = !S.user || S.user.username !== r.user.username;
       if (ganti) {
         if (pendingCount() && !confirm('Ada ' + pendingCount() + ' data belum terkirim milik akun sebelumnya. Data itu akan dihapus dari HP ini. Lanjutkan?')) { btn.disabled = false; btn.textContent = 'Masuk'; return; }
-        Object.assign(S, { db: emptyDb(), queue: {}, lastSync: '', dataKey: '', pkmId: '', ui: {} });
+        Object.assign(S, { db: emptyDb(), queue: {}, lastSync: '', dataKey: '', pkmId: '', ui: {}, ref: null });
       }
       S.token = r.token; S.user = r.user;
       persist();
@@ -361,7 +373,7 @@ function navItems() {
     ['beranda', 'Beranda', 'home'],
     ['#Pencatatan'], ['input', 'Input TTD Mingguan', 'check'], ['register', 'Register Kelas', 'grid'],
     ['#Laporan'], ['rekap-sekolah', 'Rekap Sekolah', 'chart'], ['rekap-desa', 'Rekap Desa/Kelurahan', 'map'], ['rekap-pkm', 'Rekap Puskesmas', 'hosp'],
-    ['#Data Master'], ['sekolah', 'Desa, Sekolah & Kelas', 'school'], ['siswi', 'Data Siswi', 'users'],
+    ['#Data Master'], ['sekolah', 'Wilayah Kerja', 'school'], ['siswi', 'Data Siswi', 'users'],
     ['#Lainnya'], ['sinkron', 'Sinkronisasi', 'sync'], ['panduan', 'Panduan', 'book'], ['akun', 'Akun & PIN', 'user']
   ];
   const items = [
@@ -376,7 +388,7 @@ function navItems() {
 }
 const PAGE_TITLE = {
   beranda: 'Beranda', input: 'Input TTD Mingguan', register: 'Register Kelas', 'rekap-sekolah': 'Rekap Sekolah', 'rekap-desa': 'Rekap Desa/Kelurahan',
-  'rekap-pkm': 'Rekap Puskesmas', sekolah: 'Desa, Sekolah & Kelas', siswi: 'Data Siswi', sinkron: 'Sinkronisasi', panduan: 'Panduan', akun: 'Akun & PIN',
+  'rekap-pkm': 'Rekap Puskesmas', sekolah: 'Wilayah Kerja: Desa, Sekolah & Kelas', siswi: 'Data Siswi', sinkron: 'Sinkronisasi', panduan: 'Panduan', akun: 'Akun & PIN',
   wilayah: 'Rekap Wilayah', puskesmas: 'Puskesmas', pengguna: 'Akun Pengguna', kalender: 'Kalender & Tahun Ajaran'
 };
 const curPage = () => (location.hash.replace('#', '') || 'beranda');
@@ -385,13 +397,19 @@ function renderShell() {
   const u = S.user;
   S._shellKey = JSON.stringify([S.user, S.pkm.map(p => p.id + p.nama), S.taAktif, S.kab.length]);
   const wilayah = u.role === 'pkm' ? namaPkm(u.pkmId) : u.role === 'kab' ? namaKab(u.kab) : 'Provinsi Sulawesi Barat';
-  const pkmPilihan = u.role === 'pkm' ? '' : `<select id="pkmPick" title="Lihat data puskesmas"><option value="">— pilih puskesmas —</option>${S.pkm.slice().sort(byNama).map(p => `<option value="${esc(p.id)}" ${p.id === S.pkmId ? 'selected' : ''}>${esc(p.nama)}${u.role === 'prov' ? ' · ' + esc(namaKab(p.kab).replace('Kabupaten ', '')) : ''}</option>`).join('')}</select>`;
+  let pkmPilihan = '';
+  if (u.role !== 'pkm') {
+    const kabF = u.role === 'kab' ? u.kab : (S.ui.admKab || '');
+    const daftar = S.pkm.filter(p => !kabF || p.kab === kabF).sort(byNama);
+    pkmPilihan = (u.role === 'prov' ? `<label class="wl">Kabupaten/Kota</label><select id="kabPick"><option value="">Semua kabupaten/kota</option>${S.kab.map(k => `<option value="${esc(k.id)}" ${k.id === kabF ? 'selected' : ''}>${esc(k.nama)}</option>`).join('')}</select>` : '') +
+      `<label class="wl">Puskesmas</label><select id="pkmPick" title="Lihat data puskesmas"><option value="">— pilih puskesmas (${daftar.length}) —</option>${daftar.map(p => `<option value="${esc(p.id)}" ${p.id === S.pkmId ? 'selected' : ''}>${esc(p.nama)}${u.role === 'prov' && !kabF ? ' · ' + esc(namaKab(p.kab).replace('Kabupaten ', '')) : ''}</option>`).join('')}</select>`;
+  }
   $('#root').innerHTML = `
   <div class="shell" id="shell">
     <aside class="sidebar">
       <div class="brand">${logos()}</div>
       <div class="app-title"><b>TTD Rematri Sulbar</b><small>Tablet Tambah Darah Remaja Putri · TA ${esc(S.taAktif || '-')}</small></div>
-      <div class="who"><b>${esc(u.nama)}</b>${esc(wilayah)}<br><span class="role">${ROLE_LABEL[u.role]}</span>${pkmPilihan}</div>
+      <div class="who"><b>${esc(u.nama)}</b>${esc(wilayah)}<br><span class="role">${ROLE_LABEL[u.role]}</span>${pkmPilihan ? `<div class="filt">${pkmPilihan}</div>` : ''}</div>
       <nav class="nav" id="nav">${navItems().map(n => n[0][0] === '#' ? `<div class="grp">${esc(n[0].slice(1))}</div>` :
         `<a href="#${n[0]}" data-p="${n[0]}">${ic(n[2])}<span>${esc(n[1])}</span>${n[0] === 'sinkron' ? '<span class="badge hidden" id="navPend"></span>' : ''}</a>`).join('')}
         <a href="#" id="btnLogout">${ic('logout')}<span>Keluar</span></a>
@@ -413,6 +431,14 @@ function renderShell() {
   $('#nav').addEventListener('click', e => { if (e.target.closest('a')) $('#shell').classList.remove('nav-open'); });
   $('#syncChip').onclick = () => sinkron({ notify: true });
   $('#btnLogout').onclick = e => { e.preventDefault(); keluar(); };
+  const kabPick = $('#kabPick');
+  if (kabPick) kabPick.onchange = () => {
+    const k = kabPick.value;
+    S.ui.admKab = k; S.ui.wlKab = k; S.ui.pkKab = k;
+    const cur = S.pkm.find(p => p.id === S.pkmId);
+    if (k && cur && cur.kab !== k) { S.pkmId = ''; S.db = emptyDb(); S.lastSync = ''; S.ver++; }
+    persist(); renderShell();
+  };
   const pick = $('#pkmPick');
   if (pick) pick.onchange = async () => {
     S.pkmId = pick.value; S.db = emptyDb(); S.lastSync = ''; S.ver++; S.ui = {};
@@ -470,7 +496,7 @@ function pilihSekolahKelas(prefix, withKelas = true) {
     if (!kel.find(k => k.id === kid)) kid = kel[0] ? kel[0].id : '';
     S.ui[prefix + 'Kel'] = kid;
   }
-  const html = `<label class="f"><span>Sekolah</span><select class="inp" data-ui="${prefix}Sek">${opsi(sek, sid, sek.length ? '' : '— belum ada sekolah —', s => s.nama + (s.desaId ? ' · ' + ((getRow('Desa', s.desaId) || {}).nama || '') : ''))}</select></label>` +
+  const html = `<label class="f"><span>Sekolah</span><select class="inp" data-ui="${prefix}Sek">${opsi(sek, sid, sek.length ? '' : '— belum ada sekolah —', s => s.nama + (s.desaId ? ' · ' + labelDesa(getRow('Desa', s.desaId)) : ''))}</select></label>` +
     (withKelas ? `<label class="f"><span>Kelas</span><select class="inp" data-ui="${prefix}Kel">${opsi(kel, kid, kel.length ? '' : '— belum ada kelas —')}</select></label>` : '');
   return { sid, kid, html };
 }
@@ -530,7 +556,7 @@ PAGES.beranda = v => {
 
   v.innerHTML = `
   <div class="hero"><h1>${salam}, ${esc(S.user.nama.split(' ')[0])} 👋</h1><p>${esc(namaPkm(S.user.pkmId))} · Tahun Ajaran ${esc(S.taAktif)} · posisi ${b ? blnLabel(b) : '-'}</p></div>
-  ${!sek.length ? `<div class="alert warn">Belum ada data sekolah. Mulai dari menu <a href="#sekolah">Desa, Sekolah &amp; Kelas</a>, lalu upload daftar siswi di <a href="#siswi">Data Siswi</a>.</div>` : ''}
+  ${!sek.length ? `<div class="alert warn">Belum ada data sekolah. Mulai dari menu <a href="#sekolah">Wilayah Kerja</a>, lalu upload daftar siswi di <a href="#siswi">Data Siswi</a>.</div>` : ''}
   <div class="stats">
     <div class="stat"><small>Sekolah binaan</small><b>${sek.length}</b><span>${desaList().length} desa/kelurahan</span></div>
     <div class="stat"><small>Kelas</small><b>${kel.length}</b><span>TA ${esc(S.taAktif)}</span></div>
@@ -614,7 +640,7 @@ PAGES.input = v => {
     ${kal ? `<div class="weektabs">${Array.from({ length: kal.minggu }, (_, i) => i + 1).map(n => `<button data-w="${n}" class="${n === w ? 'on' : ''}" ${kal.libur.indexOf(n) >= 0 ? 'disabled' : ''}>Minggu ${ROMAWI[n - 1]}<small>${kal.libur.indexOf(n) >= 0 ? 'libur' : n === w ? 'dipilih' : '&nbsp;'}</small></button>`).join('')}</div>` : '<div class="alert warn">Tidak ada bulan aktif pada kalender tahun ajaran ini.</div>'}
     <div class="legend"><span><b class="k1">1</b>Dapat &amp; diminum</span><span><b class="k0">0</b>Dapat, tidak diminum</span><span><b class="kX">X</b>Tidak dapat</span><span><b class="kS">–</b>Belum terdaftar / di luar usia 12–18 th</span></div>
   </div>
-  ${!kal ? '' : !sk.kid ? `<div class="card"><div class="empty">Belum ada kelas. Tambahkan sekolah &amp; kelas di menu <a href="#sekolah">Desa, Sekolah &amp; Kelas</a>.</div></div>` :
+  ${!kal ? '' : !sk.kid ? `<div class="card"><div class="empty">Belum ada kelas. Tambahkan sekolah &amp; kelas di menu <a href="#sekolah">Wilayah Kerja</a>.</div></div>` :
     !sw.length ? `<div class="card"><div class="empty">Kelas ini belum punya siswi. <a href="#siswi">Upload / tambah siswi</a>.</div></div>` :
     libur ? '<div class="card"><div class="empty">Minggu ini ditandai libur pada kalender sekolah.</div></div>' : `
   <div class="slist" id="slist">${sw.map((s, i) => { const c = kode(s); return `
@@ -737,9 +763,9 @@ PAGES['rekap-desa'] = v => {
   const bs = bulanSelect('rdBln', true);
   const desa = getRow('Desa', did);
   const items = sekolahList(did).map(s => ({ label: s.nama, rekap: rekapSekolah(s.id) }));
-  v.innerHTML = `<div class="card"><div class="row"><label class="f"><span>Desa/Kelurahan</span><select class="inp" data-ui="rdDesa">${opsi(ds, did, ds.length ? '' : '— belum ada desa —')}</select></label>${bs.html}
+  v.innerHTML = `<div class="card"><div class="row"><label class="f"><span>Desa/Kelurahan</span><select class="inp" data-ui="rdDesa">${opsi(ds, did, ds.length ? '' : '— belum ada desa —', labelDesaKec)}</select></label>${bs.html}
     <div class="shrink" style="margin-bottom:12px"><button class="btn" id="xBtn" ${did ? '' : 'disabled'}>${ic('download')} Unduh Excel</button></div></div></div>
-  <div class="card"><h3>${ic('map')} Rekap Distribusi &amp; Konsumsi TTD Rematri · ${esc(desa ? desa.nama : '')}</h3>${tabelRekapHtml(items, bs.val, 'Sekolah', desa ? desa.nama : 'Total')}
+  <div class="card"><h3>${ic('map')} Rekap Distribusi &amp; Konsumsi TTD Rematri · ${esc(desa ? labelDesa(desa) : '')}</h3>${tabelRekapHtml(items, bs.val, 'Sekolah', desa ? labelDesa(desa) : 'Total')}
   <div class="alert info" style="margin-top:12px">Data rekap desa/kelurahan ini yang dientri ke laporan bulanan <b>SIGIZI KESGA</b>.</div></div>`;
   bindUi(v);
   $('#xBtn').onclick = () => runExport(() => exportRekapDesa(did));
@@ -749,9 +775,10 @@ PAGES['rekap-pkm'] = v => {
   if (butuhPkm(v)) return;
   const bs = bulanSelect('rpBln', true);
   const pid = isPkm() ? S.user.pkmId : S.pkmId;
-  const items = desaList().map(d => ({ label: d.nama, rekap: rekapDesa(d.id) }));
-  v.innerHTML = `<div class="card"><div class="row">${bs.html}<div class="shrink" style="margin-bottom:12px"><button class="btn" id="xBtn">${ic('download')} Unduh Excel</button></div></div></div>
-  <div class="card"><h3>${ic('hosp')} Rekap ${esc(namaPkm(pid))} per Desa/Kelurahan</h3>${tabelRekapHtml(items, bs.val, 'Desa/Kelurahan', namaPkm(pid))}</div>`;
+  const tingkat = S.ui.rpTingkat === 'kec' ? 'kec' : 'desa';
+  const items = tingkat === 'kec' ? itemsKecamatan() : desaList().map(d => ({ label: labelDesaKec(d), rekap: rekapDesa(d.id) }));
+  v.innerHTML = `<div class="card"><div class="row"><label class="f"><span>Tingkat</span><select class="inp" data-ui="rpTingkat"><option value="desa">Per desa/kelurahan</option><option value="kec" ${tingkat === 'kec' ? 'selected' : ''}>Per kecamatan</option></select></label>${bs.html}<div class="shrink" style="margin-bottom:12px"><button class="btn" id="xBtn">${ic('download')} Unduh Excel</button></div></div></div>
+  <div class="card"><h3>${ic('hosp')} Rekap ${esc(namaPkm(pid))} per ${tingkat === 'kec' ? 'Kecamatan' : 'Desa/Kelurahan'}</h3>${tabelRekapHtml(items, bs.val, tingkat === 'kec' ? 'Kecamatan' : 'Desa/Kelurahan', namaPkm(pid))}</div>`;
   bindUi(v);
   $('#xBtn').onclick = () => runExport(() => exportRekapPkm());
 };
@@ -799,20 +826,41 @@ PAGES.wilayah = v => {
   go(false);
 };
 
-/* ---------- DESA, SEKOLAH & KELAS ---------- */
+/* ---------- WILAYAH KERJA (desa, sekolah, kelas) ---------- */
 PAGES.sekolah = v => {
   const ds = desaList();
-  const sek = sekolahList();
+  const semuaSek = sekolahList('', true);
+  const nNon = semuaSek.filter(s => s.nonaktif === '1').length;
+  const fDesa = S.ui.wkDesa && getRow('Desa', S.ui.wkDesa) && S.ui.wkDesa !== '' ? S.ui.wkDesa : '';
+  const q = (S.ui.wkQ || '').toLowerCase();
+  const sekTampil = semuaSek.filter(s => (!fDesa || s.desaId === fDesa) && (!q || s.nama.toLowerCase().includes(q) || String(s.npsn || '').includes(q)));
+  const byKec = {};
+  ds.forEach(d => { const k = d.kecamatan || '(Kecamatan belum diisi)'; (byKec[k] = byKec[k] || []).push(d); });
   const sk = pilihSekolahKelas('mk', false);
   const kel = kelasList(sk.sid);
   const jmlKelas = sid => kelasList(sid).length;
   const jmlSiswi = kid => siswiList(kid).length;
+  const desaRows = Object.keys(byKec).map(k => byKec[k].map((d, i) => `<tr>${i === 0 ? `<td rowspan="${byKec[k].length}" style="vertical-align:top"><b>${esc(k)}</b></td>` : ''}<td>${esc(labelDesa(d))}${d.kode ? '' : ' <span class="pill grey">input manual</span>'}</td><td>${sekolahList(d.id).length}</td>
+    <td class="act"><button class="btn sm ghost" data-ed="Desa:${esc(d.id)}">Ubah</button> <button class="btn sm danger" data-del="Desa:${esc(d.id)}">Lepas</button></td></tr>`).join('')).join('');
   v.innerHTML = `
-  <div class="card"><h3>${ic('map')} Desa/Kelurahan wilayah kerja<button class="btn sm right" id="addDesa">${ic('plus')} Tambah</button></h3>
-    ${ds.length ? `<div class="tbl-wrap"><table class="t list"><thead><tr><th class="l">Nama desa/kelurahan</th><th class="l">Jumlah sekolah</th><th></th></tr></thead><tbody>${ds.map(d => `<tr><td>${esc(d.nama)}</td><td>${sekolahList(d.id).length}</td><td class="act"><button class="btn sm ghost" data-ed="Desa:${esc(d.id)}">Ubah</button> <button class="btn sm danger" data-del="Desa:${esc(d.id)}">Hapus</button></td></tr>`).join('')}</tbody></table></div>` : '<div class="empty">Belum ada desa/kelurahan.</div>'}
+  <div class="stats">
+    <div class="stat"><small>Desa/kelurahan binaan</small><b>${ds.length}</b><span>${Object.keys(byKec).length} kecamatan</span></div>
+    <div class="stat"><small>Sekolah aktif</small><b>${semuaSek.length - nNon}</b><span>${nNon ? nNon + ' dinonaktifkan' : 'SMP & SMA sederajat'}</span></div>
+    <div class="stat"><small>Kelas</small><b>${kelasList().length}</b><span>TA ${esc(S.taAktif)}</span></div>
+    <div class="stat"><small>Remaja putri</small><b>${siswiList().length}</b><span>terdaftar</span></div>
   </div>
-  <div class="card"><h3>${ic('school')} Sekolah<button class="btn sm right" id="addSek" ${ds.length ? '' : 'disabled'}>${ic('plus')} Tambah</button></h3>
-    ${sek.length ? `<div class="tbl-wrap"><table class="t list"><thead><tr><th class="l">Nama sekolah</th><th class="l">Jenjang</th><th class="l">Desa/Kelurahan</th><th class="l">Kelas</th><th></th></tr></thead><tbody>${sek.map(s => `<tr><td>${esc(s.nama)}</td><td>${esc(s.jenjang)}</td><td>${esc((getRow('Desa', s.desaId) || {}).nama || '-')}</td><td>${jmlKelas(s.id)}</td><td class="act"><button class="btn sm ghost" data-ed="Sekolah:${esc(s.id)}">Ubah</button> <button class="btn sm danger" data-del="Sekolah:${esc(s.id)}">Hapus</button></td></tr>`).join('')}</tbody></table></div>` : `<div class="empty">${ds.length ? 'Belum ada sekolah.' : 'Tambahkan desa/kelurahan terlebih dahulu.'}</div>`}
+  <div class="alert info">Desa binaan dan sekolah sudah terisi dari data resmi (Kemendagri &amp; Kemendikdasmen). Silakan periksa: <b>perbaiki</b> nama yang keliru, <b>pindahkan</b> sekolah ke desa yang benar, <b>nonaktifkan</b> sekolah yang tidak dilayani, atau <b>tambahkan</b> yang belum ada. Setiap perubahan otomatis tersimpan ke database dan terlihat oleh admin.</div>
+  <div class="card"><h3>${ic('map')} Desa/Kelurahan binaan<button class="btn sm right" id="addDesa">${ic('plus')} Tambah desa</button></h3>
+    ${ds.length ? `<div class="tbl-wrap" style="max-height:420px"><table class="t list"><thead><tr><th class="l">Kecamatan</th><th class="l">Desa/Kelurahan</th><th class="l">Sekolah aktif</th><th></th></tr></thead><tbody>${desaRows}</tbody></table></div>` : '<div class="empty">Belum ada desa/kelurahan binaan.</div>'}
+  </div>
+  <div class="card"><h3>${ic('school')} Sekolah<button class="btn sm right" id="addSek" ${ds.length ? '' : 'disabled'}>${ic('plus')} Tambah sekolah</button></h3>
+    <div class="row"><label class="f"><span>Desa/Kelurahan</span><select class="inp" data-ui="wkDesa"><option value="">Semua desa/kelurahan</option>${ds.map(d => `<option value="${esc(d.id)}" ${d.id === fDesa ? 'selected' : ''}>${esc(labelDesaKec(d))}</option>`).join('')}</select></label>
+      <label class="f"><span>Cari</span><input class="inp" id="wkQ" value="${esc(S.ui.wkQ || '')}" placeholder="nama sekolah atau NPSN"></label></div>
+    ${sekTampil.length ? `<div class="tbl-wrap" style="max-height:480px"><table class="t list"><thead><tr><th class="l">Nama sekolah</th><th class="l">Jenjang</th><th class="l">NPSN</th><th class="l">Desa/Kelurahan</th><th class="l">Kelas</th><th class="l">Status</th><th></th></tr></thead><tbody>
+    ${sekTampil.map(s => `<tr style="${s.nonaktif === '1' ? 'opacity:.55' : ''}"><td>${esc(s.nama)}</td><td>${esc(s.jenjang)}${s.status ? ` <small class="muted">${esc(s.status)}</small>` : ''}</td><td>${esc(s.npsn || '-')}</td><td>${esc(labelDesa(getRow('Desa', s.desaId)))}</td><td>${jmlKelas(s.id)}</td>
+      <td>${s.nonaktif === '1' ? '<span class="pill grey">Nonaktif</span>' : '<span class="pill">Aktif</span>'}</td>
+      <td class="act"><button class="btn sm ghost" data-ed="Sekolah:${esc(s.id)}">Ubah</button> <button class="btn sm ${s.nonaktif === '1' ? 'ghost' : 'danger'}" data-akt="${esc(s.id)}">${s.nonaktif === '1' ? 'Aktifkan' : 'Nonaktifkan'}</button></td></tr>`).join('')}
+    </tbody></table></div>` : `<div class="empty">${semuaSek.length ? 'Tidak ada sekolah yang cocok dengan filter.' : 'Belum ada sekolah.'}</div>`}
   </div>
   <div class="card"><h3>${ic('grid')} Kelas · TA ${esc(S.taAktif)}<button class="btn sm right" id="addKel" ${sk.sid ? '' : 'disabled'}>${ic('plus')} Tambah</button></h3>
     <div class="row">${sk.html}</div>
@@ -823,41 +871,124 @@ PAGES.sekolah = v => {
     <button class="btn ghost" id="btnNaik">${ic('layers')} Naik kelas dari TA ${esc(taSebelum(S.taAktif))}</button>
   </div>`;
   bindUi(v);
+  const qi = $('#wkQ');
+  qi.oninput = () => { S.ui.wkQ = qi.value; clearTimeout(qi._t); qi._t = setTimeout(() => { rerender(); const n = $('#wkQ'); n.focus(); n.setSelectionRange(n.value.length, n.value.length); }, 350); };
   $('#addDesa').onclick = () => formDesa();
-  $('#addSek').onclick = () => formSekolah();
+  $('#addSek').onclick = () => formSekolah(null, fDesa);
   $('#addKel').onclick = () => formKelas(null, sk.sid);
   $$('[data-ed]', v).forEach(b => b.onclick = () => { const [t, id] = b.dataset.ed.split(':'); ({ Desa: formDesa, Sekolah: formSekolah, Kelas: formKelas })[t](getRow(t, id)); });
   $$('[data-del]', v).forEach(b => b.onclick = () => { const [t, id] = b.dataset.del.split(':'); hapusMaster(t, id); });
+  $$('[data-akt]', v).forEach(b => b.onclick = () => {
+    const s = getRow('Sekolah', b.dataset.akt);
+    const non = s.nonaktif !== '1';
+    if (non && !confirm(`Nonaktifkan ${s.nama}? Sekolah tidak akan tampil di input & rekap (data lama tetap tersimpan, bisa diaktifkan lagi).`)) return;
+    simpanLokal('Sekolah', Object.assign({}, s, { nonaktif: non ? '1' : '' }));
+    rerender();
+  });
   $('#btnNaik').onclick = naikKelas;
 };
 function taSebelum(ta) { const y = parseInt(ta, 10); return (y - 1) + '/' + y; }
+const refDesa = () => ((S.ref || {}).desa || []);
+const refSekolah = () => ((S.ref || {}).sekolah || []);
+const kecList = () => [...new Set(refDesa().map(d => d.kecamatan).concat(desaList().map(d => d.kecamatan)).filter(Boolean))].sort();
+const ROMAWI_RE = /^(i{1,3}|iv|vi{0,3}|ix|xi{0,2}|x)$/i;
+const SINGKATAN = { smp: 'SMP', sma: 'SMA', smk: 'SMK', smpn: 'SMPN', sman: 'SMAN', smkn: 'SMKN', smps: 'SMPS', smas: 'SMAS', smks: 'SMKS', ma: 'MA', man: 'MAN', mas: 'MAS', mak: 'MAK', mts: 'MTs', mtsn: 'MTsN', mtss: 'MTsS', uptd: 'UPTD', upt: 'UPT', smtk: 'SMTK', smpit: 'SMPIT', smait: 'SMAIT', it: 'IT', ddi: 'DDI', guppi: 'GUPPI', pgri: 'PGRI', yppi: 'YPPI', nu: 'NU', spm: 'SPM', pdf: 'PDF', satap: 'Satap' };
+/** Penulisan seragam: huruf awal kapital; untuk sekolah, singkatan (SMP, MTs, UPTD…) & angka Romawi dipertahankan. */
+function kapitalAwal(str, sekolah) {
+  return String(str || '').trim().replace(/\s+/g, ' ').replace(/(\d)([A-Za-z]{3,})/g, '$1 $2').split(' ').map((w, i) => w.split('-').map(p => {
+    const bersih = p.replace(/\.$/, '').toLowerCase();
+    if (/^0*\d+$/.test(p)) return String(parseInt(p, 10));
+    if (sekolah && SINGKATAN[bersih]) return SINGKATAN[bersih];
+    if (ROMAWI_RE.test(p) && (sekolah || i > 0)) return p.toUpperCase();
+    if (sekolah && /\d/.test(p)) return p.toUpperCase();
+    if (sekolah && p.length >= 2 && !/[aiueo]/i.test(p)) return p.toUpperCase();
+    return p.toLowerCase().replace(/^([^a-z]*)([a-z])/, (m, a, b) => a + b.toUpperCase());
+  }).join('-')).join(' ');
+}
 
 function formDesa(row) {
-  const m = modal({
-    title: row ? 'Ubah Desa/Kelurahan' : 'Tambah Desa/Kelurahan',
-    body: `<label class="f"><span>Nama desa/kelurahan</span><input class="inp" name="nama" value="${esc(row ? row.nama : '')}" placeholder="mis. Desa Tommo" required></label>`,
+  const milik = new Set(desaList().map(d => d.kode).filter(Boolean));
+  const tersedia = refDesa().filter(d => !milik.has(d.kode));
+  const grp = {};
+  tersedia.forEach(d => { (grp[d.kecamatan] = grp[d.kecamatan] || []).push(d); });
+  const kecDl = `<datalist id="dlKec">${kecList().map(k => `<option value="${esc(k)}">`).join('')}</datalist>`;
+  const manual = `<div id="manBox"><div class="row"><label class="f"><span>Nama desa/kelurahan</span><input class="inp" name="nama" value="${esc(row ? row.nama : '')}" placeholder="mis. Tommo"></label>
+      <label class="f"><span>Jenis</span><select class="inp" name="jenis">${['Desa', 'Kelurahan'].map(j => `<option ${row && row.jenis === j ? 'selected' : ''}>${j}</option>`).join('')}</select></label></div>
+      <label class="f"><span>Kecamatan</span><input class="inp" name="kecamatan" list="dlKec" value="${esc(row ? row.kecamatan || '' : '')}"></label>${kecDl}</div>`;
+  modal({
+    title: row ? 'Ubah Desa/Kelurahan' : 'Tambah Desa/Kelurahan Binaan',
+    body: row ? manual + (row.kode ? `<p class="small muted">Kode Kemendagri: ${esc(row.kode)}</p>` : '') : `
+      <label class="f"><span>Pilih dari daftar resmi kabupaten (${tersedia.length} desa/kelurahan belum menjadi binaan Anda)</span>
+      <select class="inp" name="ref"><option value="">— tidak ada di daftar, ketik manual —</option>${Object.keys(grp).sort().map(k => `<optgroup label="Kecamatan ${esc(k)}">${grp[k].sort(byNama).map(d => `<option value="${esc(d.kode)}">${esc(d.jenis + ' ' + d.nama)}${d.pemilik ? ' — binaan ' + esc(d.pemilik) : ''}</option>`).join('')}</optgroup>`).join('')}</select></label>
+      <label class="chk" id="ikutSek" style="margin-bottom:12px"><input type="checkbox" name="ikut" checked> Tambahkan juga SMP/SMA sederajat di desa ini dari data resmi</label>
+      ${manual}`,
     ok: 'Simpan',
+    onOpen: f => {
+      if (row || !f.ref) return;
+      const upd = () => { $('#manBox', f).classList.toggle('hidden', !!f.ref.value); $('#ikutSek', f).classList.toggle('hidden', !f.ref.value); };
+      f.ref.onchange = upd; upd();
+    },
     onOk: f => {
-      const nama = f.nama.value.trim();
-      if (!nama) throw new Error('Nama wajib diisi');
-      if (desaList().some(d => d.nama.toLowerCase() === nama.toLowerCase() && (!row || d.id !== row.id))) throw new Error('Nama desa sudah ada');
-      simpanLokal('Desa', Object.assign({}, row || { id: uid('ds'), del: '' }, { nama }));
+      if (!row && f.ref && f.ref.value) {
+        const r = refDesa().find(d => d.kode === f.ref.value);
+        if (r.pemilik && !confirm(`${r.jenis} ${r.nama} sudah menjadi binaan ${r.pemilik}. Tetap tambahkan juga ke wilayah kerja Anda? (sekolahnya bisa tercatat ganda)`)) throw new Error('Dibatalkan');
+        const baru = { id: uid('ds'), del: '', nama: r.nama, jenis: r.jenis, kecamatan: r.kecamatan, kode: r.kode };
+        simpanLokal('Desa', baru);
+        let n = 0;
+        if (f.ikut.checked) {
+          const ada = new Set(sekolahList('', true).map(s => s.npsn).filter(Boolean));
+          refSekolah().filter(x => x.kodeDesa === r.kode && !ada.has(x.npsn)).forEach(x => {
+            simpanLokal('Sekolah', { id: uid('sk'), del: '', desaId: baru.id, nama: x.nama, jenjang: x.jenjang, npsn: x.npsn, status: x.status, nonaktif: '' }); n++;
+          });
+        }
+        toast(`${labelDesa(baru)} ditambahkan${n ? ` beserta ${n} sekolah` : ''}`);
+        return;
+      }
+      const nama = kapitalAwal(f.nama.value.replace(/^(desa|kelurahan|kel\.)\s+/i, ''));
+      if (!nama) throw new Error('Nama desa/kelurahan wajib diisi');
+      if (desaList().some(d => d.nama.toLowerCase() === nama.toLowerCase() && (d.kecamatan || '') === kapitalAwal(f.kecamatan.value) && (!row || d.id !== row.id))) throw new Error('Desa ini sudah ada di daftar binaan');
+      simpanLokal('Desa', Object.assign({}, row || { id: uid('ds'), del: '', kode: '' }, { nama, jenis: f.jenis.value, kecamatan: kapitalAwal(f.kecamatan.value) }));
     }
   });
-  $('input', m).focus();
 }
-function formSekolah(row) {
+function formSekolah(row, desaDefault) {
   const ds = desaList();
+  const milik = new Set(sekolahList('', true).map(s => s.npsn).filter(Boolean));
+  const desaByKode = {};
+  refDesa().forEach(d => { desaByKode[d.kode] = d; });
+  const tersedia = refSekolah().filter(x => !milik.has(x.npsn));
+  const grp = {};
+  tersedia.forEach(x => { const d = desaByKode[x.kodeDesa]; const k = d ? 'Kec. ' + d.kecamatan + ' · ' + d.jenis + ' ' + d.nama : 'Desa tidak diketahui'; (grp[k] = grp[k] || []).push(x); });
+  const jj = JENJANG.concat(row && row.jenjang && JENJANG.indexOf(row.jenjang) < 0 ? [row.jenjang] : []);
   modal({
-    title: row ? 'Ubah Sekolah' : 'Tambah Sekolah',
-    body: `<label class="f"><span>Nama sekolah</span><input class="inp" name="nama" value="${esc(row ? row.nama : '')}" placeholder="mis. SMP Negeri 1 Tommo" required></label>
-      <div class="row"><label class="f"><span>Jenjang</span><select class="inp" name="jenjang">${JENJANG.map(j => `<option ${row && row.jenjang === j ? 'selected' : ''}>${j}</option>`).join('')}</select></label>
-      <label class="f"><span>Desa/Kelurahan</span><select class="inp" name="desaId">${opsi(ds, row ? row.desaId : '')}</select></label></div>`,
+    title: row ? 'Ubah Data Sekolah' : 'Tambah Sekolah',
+    body: `${row ? '' : `<label class="f"><span>Pilih dari daftar resmi kabupaten (opsional, ${tersedia.length} sekolah)</span><select class="inp" name="ref"><option value="">— ketik manual —</option>${Object.keys(grp).sort().map(k => `<optgroup label="${esc(k)}">${grp[k].sort(byNama).map(x => `<option value="${esc(x.npsn)}">${esc(x.nama)} (${esc(x.npsn)})</option>`).join('')}</optgroup>`).join('')}</select></label>`}
+      <label class="f"><span>Nama sekolah</span><input class="inp" name="nama" value="${esc(row ? row.nama : '')}" placeholder="mis. SMP Negeri 1 Tommo"></label>
+      <div class="row"><label class="f"><span>Jenjang</span><select class="inp" name="jenjang">${jj.map(j => `<option ${row && row.jenjang === j ? 'selected' : ''}>${esc(j)}</option>`).join('')}</select></label>
+      <label class="f"><span>Status</span><select class="inp" name="status">${['', 'Negeri', 'Swasta'].map(j => `<option value="${j}" ${row && row.status === j ? 'selected' : ''}>${j || '-'}</option>`).join('')}</select></label>
+      <label class="f"><span>NPSN (opsional)</span><input class="inp" name="npsn" inputmode="numeric" maxlength="8" value="${esc(row ? row.npsn || '' : '')}"></label></div>
+      <label class="f"><span>Desa/Kelurahan binaan</span><select class="inp" name="desaId">${opsi(ds, row ? row.desaId : desaDefault, '', labelDesaKec)}</select></label>`,
     ok: 'Simpan',
+    onOpen: f => {
+      if (!f.ref) return;
+      f.ref.onchange = () => {
+        const x = refSekolah().find(r => r.npsn === f.ref.value);
+        if (!x) return;
+        f.nama.value = x.nama; f.npsn.value = x.npsn; f.status.value = x.status || '';
+        if (![...f.jenjang.options].some(o => o.value === x.jenjang)) f.jenjang.add(new Option(x.jenjang, x.jenjang));
+        f.jenjang.value = x.jenjang;
+        const d = ds.find(dd => dd.kode === x.kodeDesa);
+        if (d) f.desaId.value = d.id;
+      };
+    },
     onOk: f => {
-      const nama = f.nama.value.trim();
+      const nama = kapitalAwal(f.nama.value, true);
       if (!nama) throw new Error('Nama sekolah wajib diisi');
-      simpanLokal('Sekolah', Object.assign({}, row || { id: uid('sk'), del: '' }, { nama, jenjang: f.jenjang.value, desaId: f.desaId.value }));
+      if (!f.desaId.value) throw new Error('Pilih desa/kelurahan');
+      const npsn = f.npsn.value.replace(/\D/g, '');
+      if (npsn && sekolahList('', true).some(s => s.npsn === npsn && (!row || s.id !== row.id))) throw new Error('NPSN ini sudah terdaftar di daftar sekolah Anda');
+      if (!npsn && sekolahList('', true).some(s => s.nama.toLowerCase() === nama.toLowerCase() && (!row || s.id !== row.id))) throw new Error('Nama sekolah ini sudah ada');
+      simpanLokal('Sekolah', Object.assign({}, row || { id: uid('sk'), del: '', nonaktif: '' }, { nama, jenjang: f.jenjang.value, status: f.status.value, npsn, desaId: f.desaId.value }));
     }
   });
 }
@@ -880,7 +1011,14 @@ function formKelas(row, sekolahId) {
 }
 function hapusMaster(t, id) {
   const row = getRow(t, id);
-  if (t === 'Desa' && sekolahList(id).length) return toast('Desa ini masih memiliki sekolah. Pindahkan/hapus sekolahnya dulu.', true);
+  if (t === 'Desa') {
+    const sek = sekolahList(id, true);
+    if (sek.some(s => kelasList(s.id).length)) return toast('Ada sekolah di desa ini yang sudah memiliki kelas/siswi. Pindahkan sekolah itu ke desa lain atau nonaktifkan saja.', true);
+    if (!confirm(`Lepas ${labelDesa(row)} dari wilayah kerja?${sek.length ? ` ${sek.length} sekolah di desa ini ikut dilepas.` : ''}`)) return;
+    sek.forEach(s => simpanLokal('Sekolah', Object.assign({}, s, { del: '1' })));
+    simpanLokal('Desa', Object.assign({}, row, { del: '1' }));
+    return rerender();
+  }
   if (t === 'Sekolah' && kelasList(id).length) return toast('Sekolah ini masih memiliki kelas. Hapus kelasnya dulu.', true);
   if (t === 'Kelas') {
     const sw = siswiList(id);
@@ -915,7 +1053,7 @@ PAGES.siswi = v => {
       <button class="btn ghost" id="btnTpl">${ic('download')} Unduh template Excel</button>
       <button class="btn ghost" id="btnAdd" ${sk.kid ? '' : 'disabled'}>${ic('plus')} Tambah satu siswi</button>
     </div>
-    ${sekolahList().length ? '' : '<div class="alert warn">Tambahkan sekolah terlebih dahulu di menu <a href="#sekolah">Desa, Sekolah &amp; Kelas</a>.</div>'}
+    ${sekolahList().length ? '' : '<div class="alert warn">Tambahkan sekolah terlebih dahulu di menu <a href="#sekolah">Wilayah Kerja</a>.</div>'}
   </div>
   <div class="card"><div class="row">${sk.html}<label class="f"><span>Cari</span><input class="inp" id="swQ" value="${esc(S.ui.swQ || '')}" placeholder="nama atau NIK"></label></div>
     ${sk.kid ? `<div class="tbl-wrap"><table class="t list"><thead><tr><th>No</th><th class="l">Nama</th><th class="l">NIK</th><th class="l">Tgl lahir</th><th></th></tr></thead><tbody>
@@ -945,7 +1083,7 @@ function formSiswi(row, kelasId) {
       <label class="f"><span>Kelas</span><select class="inp" name="kelasId">${opsi(kel, row ? row.kelasId : kelasId, '', lbl)}</select></label>`,
     ok: 'Simpan',
     onOk: f => {
-      const nama = f.nama.value.trim().replace(/\s+/g, ' ');
+      const nama = kapitalAwal(f.nama.value);
       const nik = f.nik.value.replace(/\D/g, '');
       if (!nama) throw new Error('Nama wajib diisi');
       if (nik && nik.length !== 16) throw new Error('NIK harus 16 digit (atau kosongkan)');
@@ -1007,7 +1145,7 @@ function modalGantiPin(wajib) {
 /* ---------- PANDUAN ---------- */
 PAGES.panduan = v => {
   v.innerHTML = `<div class="card"><h3>${ic('book')} Alur kerja petugas gizi</h3><ol style="line-height:1.75;margin:0;padding-left:20px">
-    <li><b>Desa, Sekolah &amp; Kelas</b> — daftarkan desa/kelurahan wilayah kerja, lalu semua SMP/MTs/SMA/SMK/MA di tiap desa.</li>
+    <li><b>Wilayah Kerja</b> — desa binaan dan SMP/MTs/SMA/SMK/MA sudah terisi dari data resmi. Periksa, perbaiki nama yang keliru, nonaktifkan atau tambahkan sekolah bila perlu.</li>
     <li><b>Data Siswi</b> — upload daftar remaja putri per sekolah (Excel/Word/CSV/tempel). Kelas dibuat otomatis. NIK boleh kosong.</li>
     <li><b>Input TTD Mingguan</b> — setiap minggu pilih sekolah, kelas, bulan &amp; minggu, lalu ketuk kode tiap siswi.</li>
     <li><b>Register &amp; Rekap</b> — semua jumlah, kumulatif, dan klasifikasi &lt; 26 / ≥ 26 tablet dihitung otomatis. Unduh Excel untuk arsip atau laporan.</li>
@@ -1050,6 +1188,7 @@ PAGES.puskesmas = v => {
     try { const r = await api('savePkm', { pkm: { id: p.id, kab: p.kab, nama: p.nama, del: true } }); S.pkm = r.pkm; S.wil = null; persist(); rerender(); renderShell(); } catch (e) { toast(e.message, true); }
   });
 };
+const rapikanPkm = n => { let x = kapitalAwal(String(n || '').replace(/^(uptd\s+)?(puskesmas|pkm)\s+/i, '')); return x ? 'Puskesmas ' + x : ''; };
 function formPkm(row) {
   modal({
     title: row ? 'Ubah Puskesmas' : 'Tambah Puskesmas',
@@ -1057,7 +1196,7 @@ function formPkm(row) {
       ${S.user.role === 'prov' ? `<label class="f"><span>Kabupaten/Kota</span><select class="inp" name="kab">${S.kab.map(k => `<option value="${k.id}" ${(row ? row.kab : S.ui.pkKab) === k.id ? 'selected' : ''}>${esc(k.nama)}</option>`).join('')}</select></label>` : ''}`,
     ok: 'Simpan',
     onOk: async f => {
-      const r = await api('savePkm', { pkm: { id: row ? row.id : '', nama: f.nama.value, kab: f.kab ? f.kab.value : S.user.kab } });
+      const r = await api('savePkm', { pkm: { id: row ? row.id : '', nama: rapikanPkm(f.nama.value), kab: f.kab ? f.kab.value : S.user.kab } });
       S.pkm = r.pkm; S.wil = null; persist(); toast('Tersimpan'); renderShell();
     }
   });
@@ -1165,8 +1304,9 @@ function wizardImportPkm() {
     const items = [];
     const seen = new Set();
     rows.forEach((r, i) => {
-      const nama = teks(r[st.map.nama]).replace(/\s+/g, ' ');
-      if (!nama || /^\d+$/.test(nama) || /^(jumlah|total)/i.test(nama)) return;
+      const namaAsli = teks(r[st.map.nama]).replace(/\s+/g, ' ');
+      if (!namaAsli || /^\d+$/.test(namaAsli) || /^(jumlah|total)/i.test(namaAsli)) return;
+      const nama = rapikanPkm(namaAsli);
       const kabTeks = prov && st.map.kab >= 0 ? teks(r[st.map.kab]) : '';
       const kab = prov ? (st.map.kab >= 0 ? cocokKab(kabTeks) : st.kabTetap) : S.user.kab;
       const it = {
@@ -1178,7 +1318,7 @@ function wizardImportPkm() {
       if (!kab) { it.warn.push(`kabupaten "${kabTeks || '-'}" tidak dikenali`); it.skip = true; }
       const key = kab + '|' + nama.toLowerCase();
       if (seen.has(key)) { it.warn.push('ganda di file'); it.skip = true; }
-      if (S.pkm.some(p => p.kab === kab && p.nama.toLowerCase() === nama.toLowerCase())) it.warn.push('sudah terdaftar (hanya akun yang dibuat)');
+      if (S.pkm.some(p => p.kab === kab && rapikanPkm(p.nama).toLowerCase() === nama.toLowerCase())) it.warn.push('sudah terdaftar (hanya akun yang dibuat)');
       if (it.pin && it.pin.length < 6) { it.warn.push('PIN < 6 angka, dibuat acak'); it.pin = ''; }
       seen.add(key);
       items.push(it);
@@ -1531,7 +1671,7 @@ function wizardUpload(defaultSek) {
     kelasAda.forEach(k => { kelasByNama[k.nama.toLowerCase()] = k; });
     const items = [];
     rows.forEach((r, i) => {
-      const nama = teks(r[st.map.nama]).replace(/\s+/g, ' ');
+      const nama = kapitalAwal(teks(r[st.map.nama]));
       if (!nama || /^\d+$/.test(nama)) return;
       let nik = st.map.nik >= 0 ? teks(typeof r[st.map.nik] === 'number' ? BigInt(Math.round(r[st.map.nik])).toString() : r[st.map.nik]).replace(/\D/g, '') : '';
       const tgl = st.map.tgl >= 0 ? parseTanggal(r[st.map.tgl]) : '';
@@ -1632,7 +1772,7 @@ function addRegisterSheet(wb, kelasId) {
   ws.getCell(1, 1).value = 'FORMULIR PEMANTAUAN PROGRAM TTD REMAJA PUTRI DI SEKOLAH';
   ws.getCell(1, 1).font = { bold: true, size: 13 };
   ws.getCell(1, 1).alignment = { horizontal: 'center' };
-  [['Kelas', k.nama], ['Nama Sekolah', sek.nama], ['Desa/Kelurahan', desa.nama || '-'], ['Nama Puskesmas Pembina', iw.pkm], ['Kabupaten', iw.kab], ['Tahun Ajaran', S.taAktif], ['Jumlah siswi kelas', sw.length]]
+  [['Kelas', k.nama], ['Nama Sekolah', sek.nama], ['Desa/Kelurahan', desa.nama ? labelDesa(desa) + (desa.kecamatan ? ', Kec. ' + desa.kecamatan : '') : '-'], ['Nama Puskesmas Pembina', iw.pkm], ['Kabupaten', iw.kab], ['Tahun Ajaran', S.taAktif], ['Jumlah siswi kelas', sw.length]]
     .forEach(([a, b], i) => { ws.getCell(3 + i, 1).value = a; ws.getCell(3 + i, 3).value = ': ' + b; ws.getCell(3 + i, 1).font = { size: 10 }; ws.getCell(3 + i, 3).font = { bold: true, size: 10 }; });
   const R1 = 11, R2 = 12;
   [['No', 1], ['Nama Remaja Putri', 2], ['NIK', 3]].forEach(([t, c]) => { ws.mergeCells(R1, c, R2, c); ws.getCell(R1, c).value = t; hdr(ws.getCell(R1, c)); hdr(ws.getCell(R2, c)); });
@@ -1750,19 +1890,20 @@ async function exportRegister(kelasIds, sekolahId) {
 async function exportRekapDesa(desaId) {
   const desa = getRow('Desa', desaId);
   const wb = new ExcelJS.Workbook();
-  addRekapSheet(wb, 'Rekap ' + desa.nama, 'REKAP DISTRIBUSI DAN KONSUMSI TTD REMATRI ' + desa.nama.toUpperCase() + ' — TA ' + S.taAktif, 'Sekolah',
-    sekolahList(desaId).map(s => ({ label: s.nama, rekap: rekapSekolah(s.id) })), desa.nama, CATATAN_DESA);
+  addRekapSheet(wb, 'Rekap ' + desa.nama, 'REKAP DISTRIBUSI DAN KONSUMSI TTD REMATRI ' + labelDesa(desa).toUpperCase() + (desa.kecamatan ? ' KEC. ' + desa.kecamatan.toUpperCase() : '') + ' — TA ' + S.taAktif, 'Sekolah',
+    sekolahList(desaId).map(s => ({ label: s.nama, rekap: rekapSekolah(s.id) })), labelDesa(desa), CATATAN_DESA);
   sekolahList(desaId).forEach(s => addRekapSheet(wb, 'Rekap ' + s.nama, 'REKAP TTD REMATRI ' + s.nama.toUpperCase() + ' — TA ' + S.taAktif, 'Kelas',
     kelasList(s.id).map(k => ({ label: k.nama, rekap: rekapKelas(k.id) })), s.nama, CATATAN_SEKOLAH));
-  await unduhWb(wb, `Rekap_TTD_Rematri_${fileSafe(desa.nama)}_TA_${S.taAktif.replace('/', '-')}.xlsx`);
+  await unduhWb(wb, `Rekap_TTD_Rematri_${fileSafe(labelDesa(desa))}_TA_${S.taAktif.replace('/', '-')}.xlsx`);
 }
 async function exportRekapPkm() {
   const iw = infoWilayah();
   const wb = new ExcelJS.Workbook();
   addRekapSheet(wb, 'Rekap Puskesmas', 'REKAP DISTRIBUSI DAN KONSUMSI TTD REMATRI ' + iw.pkm.toUpperCase() + ' — ' + iw.kab.toUpperCase() + ' — TA ' + S.taAktif, 'Desa/Kelurahan',
-    desaList().map(d => ({ label: d.nama, rekap: rekapDesa(d.id) })), iw.pkm, ['Keterangan', 'Gabungan seluruh desa/kelurahan wilayah kerja puskesmas.']);
-  desaList().forEach(d => addRekapSheet(wb, 'Desa ' + d.nama, 'REKAP DISTRIBUSI DAN KONSUMSI TTD REMATRI ' + d.nama.toUpperCase() + ' — TA ' + S.taAktif, 'Sekolah',
-    sekolahList(d.id).map(s => ({ label: s.nama, rekap: rekapSekolah(s.id) })), d.nama, CATATAN_DESA));
+    desaList().map(d => ({ label: labelDesaKec(d), rekap: rekapDesa(d.id) })), iw.pkm, ['Keterangan', 'Gabungan seluruh desa/kelurahan wilayah kerja puskesmas.']);
+  addRekapSheet(wb, 'Rekap per Kecamatan', 'REKAP TTD REMATRI ' + iw.pkm.toUpperCase() + ' PER KECAMATAN — TA ' + S.taAktif, 'Kecamatan', itemsKecamatan(), iw.pkm, ['Keterangan', 'Gabungan desa/kelurahan binaan per kecamatan.']);
+  desaList().forEach(d => addRekapSheet(wb, d.nama, 'REKAP DISTRIBUSI DAN KONSUMSI TTD REMATRI ' + labelDesa(d).toUpperCase() + (d.kecamatan ? ' KEC. ' + d.kecamatan.toUpperCase() : '') + ' — TA ' + S.taAktif, 'Sekolah',
+    sekolahList(d.id).map(s => ({ label: s.nama, rekap: rekapSekolah(s.id) })), labelDesa(d), CATATAN_DESA));
   await unduhWb(wb, `Rekap_TTD_Rematri_${fileSafe(iw.pkm)}_TA_${S.taAktif.replace('/', '-')}.xlsx`);
 }
 async function exportWilayah(items, bulan, labelHead, wilayah) {

@@ -13,6 +13,7 @@ Database aplikasi ini adalah Google Sheet yang dihubungkan lewat Google Apps Scr
 | `vendor/` | Pustaka Excel (ExcelJS) & Word (JSZip), disimpan lokal agar jalan offline |
 | `assets/` | Logo Sulbar, logo Kemenkes Poltekkes Makassar, ikon aplikasi |
 | `apps-script/Code.gs` | Backend (server) yang ditempel di Google Sheet |
+| `apps-script/DataAwal.gs` | Data awal: 6 kab, 69 kecamatan, 644 desa/kelurahan (Kemendagri), 98 puskesmas + desa binaan, 912 SMP/SMA sederajat (tanpa SLB) |
 | `Template_Upload_Siswi_TTD_Rematri.xlsx` | Template Excel untuk upload data siswi |
 
 ---
@@ -25,7 +26,11 @@ Database aplikasi ini adalah Google Sheet yang dihubungkan lewat Google Apps Scr
 4. Di daftar fungsi pada toolbar, pilih **`setup`**, lalu klik **Jalankan**.
    - Google akan meminta izin. Klik *Tinjau izin → pilih akun → Lanjutan → Buka (tidak aman) → Izinkan*. Ini wajar, karena script buatan sendiri belum diverifikasi Google.
    - Setelah selesai, Sheet akan berisi tab: Users, Sessions, Kab, Pkm, Desa, Sekolah, Kelas, Siswi, TTD, Kalender, Setting.
-5. Klik **Terapkan (Deploy) → Deployment baru**:
+5. Tambahkan file kedua: klik **＋ → Skrip**, beri nama `DataAwal`, tempel isi `apps-script/DataAwal.gs`, lalu **Simpan**.
+6. Pilih fungsi **`muatDataAwal`** → **Jalankan**. Data wilayah, puskesmas, desa binaan, dan sekolah langsung masuk.
+   - Fungsi ini aman diulang: data yang sudah ada diperbarui, tidak dobel.
+   - Puskesmas yang sebelumnya sudah di-import (mis. "BANGGAE I") hanya dirapikan namanya menjadi "Puskesmas Banggae I". Akun petugas dan data pencatatannya tetap tersambung.
+7. Klik **Terapkan (Deploy) → Deployment baru**:
    - Jenis: **Aplikasi web**
    - Jalankan sebagai: **Saya**
    - Yang memiliki akses: **Siapa saja**
@@ -63,7 +68,13 @@ Admin Kabupaten/Kota juga bisa menambah puskesmas dan akun petugas, tetapi hanya
 
 ## D. Alur kerja petugas gizi
 
-1. **Desa, Sekolah & Kelas**: daftarkan desa/kelurahan, lalu sekolah-sekolah di tiap desa.
+1. **Wilayah Kerja**: desa binaan dan SMP/SMA sederajat sudah terisi dari data resmi. Petugas cukup memeriksa:
+   - perbaiki nama yang keliru, atau pindahkan sekolah ke desa yang benar (tombol **Ubah**),
+   - **Nonaktifkan** sekolah yang tidak dilayani,
+   - **Tambah desa** atau **Tambah sekolah** dari daftar resmi kabupaten, atau ketik manual,
+   - **Lepas** desa yang ternyata bukan wilayah kerjanya.
+
+   Setiap perubahan tersimpan ke database dan langsung terlihat oleh admin.
 2. **Data Siswi**: upload daftar siswi lewat Excel (.xlsx), CSV, Word (.docx berisi tabel), atau salin–tempel.
    - Kelas yang belum ada akan dibuat otomatis.
    - NIK boleh kosong.
@@ -103,6 +114,13 @@ Penyaringan data dilakukan di server, sehingga data puskesmas lain tidak pernah 
 5. Setelah laporan tahun lalu selesai, Admin Provinsi dapat **mengarsipkan** tahun ajaran lama ke file Sheet terpisah agar database tetap ringan.
 
 ## H. Memperbarui aplikasi
+
+**Pembaruan versi ini (data wilayah & sekolah):**
+1. Di Apps Script, ganti isi `Code.gs` dengan yang baru, lalu tambahkan file `DataAwal` (langkah A.5).
+2. Jalankan **`setup`** sekali (menambah kolom & sheet baru), lalu jalankan **`muatDataAwal`**.
+3. **Terapkan → Kelola deployment → ✏️ → Versi baru → Terapkan** (URL tetap).
+4. Upload ulang file PWA ke GitHub.
+
 
 - **Perubahan `Code.gs`**: buka *Deploy → Kelola deployment → ikon pensil → Versi: Versi baru → Terapkan*. Dengan cara ini URL tidak berubah.
 - **Perubahan file PWA**: naikkan angka versi di `sw.js` (`ttd-rematri-sulbar-v1` → `v2`) supaya HP pengguna mengambil versi terbaru.

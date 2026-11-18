@@ -19,13 +19,16 @@ var SCHEMA = {
   Sessions: ['token', 'username', 'expires'],
   Kab:      ['id', 'nama'],
   Pkm:      ['id', 'kab', 'nama', 'del', 'updatedAt'],
-  Desa:     ['id', 'pkmId', 'nama', 'del', 'updatedAt'],
-  Sekolah:  ['id', 'pkmId', 'desaId', 'nama', 'jenjang', 'del', 'updatedAt'],
+  Desa:     ['id', 'pkmId', 'nama', 'del', 'updatedAt', 'kecamatan', 'kode', 'jenis'],
+  Sekolah:  ['id', 'pkmId', 'desaId', 'nama', 'jenjang', 'del', 'updatedAt', 'npsn', 'status', 'nonaktif'],
   Kelas:    ['id', 'pkmId', 'sekolahId', 'ta', 'nama', 'tingkat', 'del', 'updatedAt'],
   Siswi:    ['id', 'pkmId', 'kelasId', 'ta', 'nama', 'nik', 'tglLahir', 'del', 'updatedAt'],
   TTD:      ['id', 'pkmId', 'siswiId', 'ta', 'bulan', 'w1', 'w2', 'w3', 'w4', 'w5', 'by', 'updatedAt'],
   Kalender: ['ta', 'bulan', 'aktif', 'minggu', 'libur'],
-  Setting:  ['key', 'value']
+  Setting:  ['key', 'value'],
+  // Data induk (referensi) — diisi oleh muatDataAwal(), dibaca petugas saat menambah desa/sekolah
+  Ref_Desa:    ['kode', 'kab', 'kecKode', 'kecamatan', 'nama', 'jenis'],
+  Ref_Sekolah: ['npsn', 'kab', 'kodeDesa', 'nama', 'jenjang', 'status']
 };
 
 var KAB_SULBAR = [
@@ -185,11 +188,23 @@ function bootstrap_(user, pkmId, since) {
   var kalender = readTable_('Kalender').rows;
 
   var target = user.role === 'pkm' ? user.pkmId : (pkmId || '');
-  var data = null;
+  var data = null, ref = null;
   if (target) {
     var p = pkmAll.filter(function (x) { return x.id === target; })[0];
     if (!p || !canSeePkm_(user, p)) throw new Error('Tidak berhak mengakses puskesmas ini');
     data = {};
+    if (!since) {
+      var namaPkm = {};
+      pkmAll.forEach(function (x) { namaPkm[x.id] = x.nama; });
+      var pemilik = {};
+      readTable_('Desa').rows.forEach(function (d) {
+        if (d.del !== '1' && d.kode && d.pkmId !== target && namaPkm[d.pkmId]) pemilik[d.kode] = namaPkm[d.pkmId];
+      });
+      ref = {
+        desa: readTable_('Ref_Desa').rows.filter(function (d) { return d.kab === p.kab; }).map(function (d) { d.pemilik = pemilik[d.kode] || ''; return d; }),
+        sekolah: readTable_('Ref_Sekolah').rows.filter(function (x) { return x.kab === p.kab; })
+      };
+    }
     PKM_TABLES.forEach(function (name) {
       data[name] = readTable_(name).rows.filter(function (r) {
         if (r.pkmId !== target) return false;
@@ -201,7 +216,7 @@ function bootstrap_(user, pkmId, since) {
   }
   return {
     serverTime: serverTime, user: publicUser_(user), kab: kab, pkm: pkmScope,
-    taAktif: taAktif, kalender: kalender, pkmId: target, data: data, full: !since
+    taAktif: taAktif, kalender: kalender, pkmId: target, data: data, ref: ref, full: !since
   };
 }
 
@@ -329,7 +344,8 @@ function importPkm_(user, rows, buatAkun) {
       hasil.push(out);
       if (!nama) { out.status = 'Dilewati: nama puskesmas kosong'; return; }
       if (kabIds.indexOf(kab) < 0) { out.status = 'Dilewati: kabupaten/kota tidak dikenali'; return; }
-      var ada = pkmAll.concat(pkmBaru).filter(function (p) { return p.kab === kab && p.nama.toLowerCase() === nama.toLowerCase(); })[0];
+      var np = function (x) { return String(x || '').toLowerCase().replace(/\b(uptd|upt|puskesmas|pkm)\b/g, '').replace(/[^a-z0-9]/g, ''); };
+      var ada = pkmAll.concat(pkmBaru).filter(function (p) { return p.kab === kab && np(p.nama) === np(nama); })[0];
       var p = ada;
       if (!p) {
         p = { id: 'pkm_' + randomId_(8), kab: kab, nama: nama, del: '', updatedAt: now };
@@ -486,6 +502,122 @@ function arsipTA_(user, ta) {
     if (d) arsip.deleteSheet(d);
   });
   return { url: arsip.getUrl(), jumlah: jumlah };
+}
+
+/* ============================ DATA AWAL ============================ */
+
+/**
+ * Memasukkan data wilayah (kab, kecamatan, desa), puskesmas + desa binaan, dan SMP/SMA sederajat
+ * dari DATA_AWAL (file DataAwal.gs). Jalankan sekali dari editor setelah setup().
+ * Aman diulang: data yang sudah ada diperbarui, tidak dobel. Nama puskesmas lama (mis. "BANGGAE I")
+ * dirapikan tanpa mengubah id, sehingga akun petugas & data pencatatan tetap tersambung.
+ */
+function muatDataAwal() {
+  if (typeof DATA_AWAL === 'undefined') throw new Error('File DataAwal.gs belum ditambahkan');
+  setup();
+  var D = DATA_AWAL, now = nowIso_();
+  var kecNama = {}, kecKab = {};
+  D.kec.forEach(function (k) { kecNama[k[0]] = k[2]; kecKab[k[0]] = k[1]; });
+  var desaBy = {};
+  D.desa.forEach(function (d) { desaBy[d[0]] = d; });
+  var normP = function (n) { return String(n || '').toLowerCase().replace(/\b(uptd|upt|puskesmas|pkm)\b/g, '').replace(/[^a-z0-9]/g, ''); };
+  var normD = function (n) { return String(n || '').toLowerCase().replace(/^(desa|kelurahan|kel\.?)\s+/, '').replace(/[^a-z0-9]/g, ''); };
+  var ringkas = {};
+
+  withLock_(function () {
+    // 1) Referensi
+    tulisUlang_('Ref_Desa', D.desa.map(function (d) {
+      return { kode: d[0], kab: kecKab[d[1]], kecKode: d[1], kecamatan: kecNama[d[1]], nama: d[2], jenis: d[3] };
+    }));
+    tulisUlang_('Ref_Sekolah', D.sekolah.map(function (x) {
+      return { npsn: x[0], kab: x[2], kodeDesa: x[1], nama: x[3], jenjang: x[4], status: x[5] };
+    }));
+    // Nama kabupaten
+    var kabRows = readTable_('Kab').rows;
+    D.kab.forEach(function (k) {
+      var ada = kabRows.filter(function (r) { return r.id === k[0]; })[0];
+      if (ada) ada.nama = k[1]; else kabRows.push({ id: k[0], nama: k[1] });
+    });
+    tulisUlang_('Kab', kabRows);
+
+    // 2) Puskesmas (rapikan nama, pertahankan id)
+    var pkmRows = readTable_('Pkm').rows;
+    var pkmId = [], namaLama = {};
+    D.pkm.forEach(function (p, i) {
+      var kunci = [normP(p[1]), normP(D.pkmRaw[i])];
+      var ada = pkmRows.filter(function (r) { return r.kab === p[0] && r.del !== '1' && kunci.indexOf(normP(r.nama)) >= 0; })[0];
+      if (ada) {
+        if (ada.nama !== p[1]) { namaLama[ada.id] = ada.nama; ada.nama = p[1]; ada.updatedAt = now; }
+      } else {
+        ada = { id: 'pkm_' + randomId_(8), kab: p[0], nama: p[1], del: '', updatedAt: now };
+        pkmRows.push(ada);
+      }
+      pkmId[i] = ada.id;
+    });
+    tulisUlang_('Pkm', pkmRows);
+    ringkas.puskesmas = D.pkm.length;
+
+    // 3) Nama akun petugas yang memakai nama puskesmas lama
+    var users = readTable_('Users').rows, ubahUser = 0;
+    users.forEach(function (u) {
+      if (u.role !== 'pkm' || !namaLama[u.pkmId]) return;
+      var baru = pkmRows.filter(function (r) { return r.id === u.pkmId; })[0].nama;
+      if (normP(u.nama.replace(/^petugas gizi\s*/i, '')) === normP(namaLama[u.pkmId])) { u.nama = 'Petugas Gizi ' + baru; ubahUser++; }
+    });
+    if (ubahUser) tulisUlang_('Users', users);
+
+    // 4) Desa binaan
+    var desaRows = readTable_('Desa').rows;
+    var desaIdByKode = {}; // pkmId|kode -> id
+    D.binaan.forEach(function (b) {
+      var pid = pkmId[b[0]], ref = b[1] ? desaBy[b[1]] : null;
+      var nama = ref ? ref[2] : b[2];
+      var ada = desaRows.filter(function (r) {
+        return r.pkmId === pid && r.del !== '1' && ((ref && r.kode === ref[0]) || normD(r.nama) === normD(nama));
+      })[0];
+      var isi = { nama: nama, kecamatan: ref ? kecNama[ref[1]] : (ada ? ada.kecamatan : ''), kode: ref ? ref[0] : '', jenis: ref ? ref[3] : 'Desa' };
+      if (ada) {
+        if (!ada.kode) { Object.keys(isi).forEach(function (k) { ada[k] = isi[k]; }); ada.updatedAt = now; }
+      } else {
+        ada = { id: 'ds_' + randomId_(10), pkmId: pid, del: '', updatedAt: now };
+        Object.keys(isi).forEach(function (k) { ada[k] = isi[k]; });
+        desaRows.push(ada);
+      }
+      if (ada.kode) desaIdByKode[ada.kode] = { pkmId: pid, id: ada.id };
+    });
+    tulisUlang_('Desa', desaRows);
+    ringkas.desa = D.binaan.length;
+
+    // 5) Sekolah (SMP & SMA sederajat) mengikuti desanya
+    var skRows = readTable_('Sekolah').rows, nSk = 0;
+    D.sekolah.forEach(function (x) {
+      var tgt = desaIdByKode[x[1]];
+      if (!tgt) return;
+      var ada = skRows.filter(function (r) {
+        return r.pkmId === tgt.pkmId && r.del !== '1' && (r.npsn === x[0] || (!r.npsn && normD(r.nama) === normD(x[3])));
+      })[0];
+      if (ada) {
+        if (!ada.npsn) { ada.npsn = x[0]; ada.status = x[5]; ada.jenjang = x[4]; ada.nama = x[3]; ada.desaId = ada.desaId || tgt.id; ada.updatedAt = now; }
+      } else {
+        skRows.push({ id: 'sk_' + randomId_(10), pkmId: tgt.pkmId, desaId: tgt.id, nama: x[3], jenjang: x[4], del: '', updatedAt: now, npsn: x[0], status: x[5], nonaktif: '' });
+      }
+      nSk++;
+    });
+    tulisUlang_('Sekolah', skRows);
+    ringkas.sekolah = nSk;
+  });
+  var msg = 'Data awal dimuat: ' + ringkas.puskesmas + ' puskesmas, ' + ringkas.desa + ' desa binaan, ' + ringkas.sekolah + ' sekolah.';
+  Logger.log(msg);
+  return msg;
+}
+
+/** Tulis ulang seluruh isi tabel (dipakai untuk data kecil/menengah). */
+function tulisUlang_(name, objs) {
+  var sh = sheet_(name), head = SCHEMA[name];
+  sh.clearContents();
+  var data = [head].concat(objs.map(function (o) { return head.map(function (k) { return o[k] == null ? '' : String(o[k]); }); }));
+  sh.getRange(1, 1, data.length, head.length).setNumberFormat('@').setValues(data);
+  sh.getRange(1, 1, 1, head.length).setFontWeight('bold');
 }
 
 /* ============================ LOGIKA HITUNG (sama dengan PWA) ============================ */

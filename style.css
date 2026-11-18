@@ -99,7 +99,9 @@ textarea.inp { min-height: 120px; resize: vertical; }
 .who { margin: 10px 14px; padding: 10px 12px; background: rgba(255, 255, 255, .09); border-radius: 12px; font-size: 13px; }
 .who b { display: block; color: #fff; font-size: 14px; }
 .who .role { display: inline-block; margin-top: 4px; padding: 2px 8px; border-radius: 99px; background: var(--lime); color: #2f3600; font-size: 11.5px; font-weight: 700; }
-.who select { margin-top: 8px; width: 100%; padding: 7px 8px; border-radius: 8px; border: 0; color: var(--ink); font-size: 13px; }
+.who .filt { margin-top: 6px; }
+.who .wl { display: block; font-size: 11px; color: #bfeee9; margin: 8px 0 3px; text-transform: uppercase; letter-spacing: .6px; }
+.who select { margin-top: 0; width: 100%; padding: 7px 8px; border-radius: 8px; border: 0; color: var(--ink); font-size: 13px; }
 .nav { padding: 6px 10px 16px; flex: 1; }
 .nav .grp { font-size: 11px; text-transform: uppercase; letter-spacing: 1px; color: #9fded7; margin: 14px 10px 6px; }
 .nav a {
