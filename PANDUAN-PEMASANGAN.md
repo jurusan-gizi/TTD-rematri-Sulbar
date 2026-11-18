@@ -35,7 +35,7 @@ Database aplikasi ini adalah Google Sheet yang dihubungkan lewat Google Apps Scr
 
 ## B. Pasang aplikasi (GitHub Pages)
 
-1. Buka `config.js`, ganti `TEMPEL_URL_WEB_APP_DI_SINI` dengan URL `/exec` dari langkah A.5.
+1. `config.js` sudah berisi URL Web App. Jika suatu saat membuat **deployment baru** (URL berubah), ganti URL di file ini.
 2. Upload seluruh isi folder ini ke repository GitHub, mis. `ttd-rematri-sulbar`.
 3. Masuk ke **Settings → Pages**. Pada Source pilih *Deploy from a branch*, branch `main`, folder `/root`, lalu klik Save.
 4. Aplikasi bisa dibuka di `https://<username>.github.io/ttd-rematri-sulbar/`.
@@ -104,4 +104,4 @@ Penyaringan data dilakukan di server, sehingga data puskesmas lain tidak pernah 
 
 ---
 
-Dikembangkan untuk Jurusan Gizi, Poltekkes Kemenkes Makassar.
+Developed: **Manjilala, S.Gz., M.Gizi** — Jurusan Gizi, Poltekkes Kemenkes Makassar.

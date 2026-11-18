@@ -48,6 +48,8 @@ a { color: var(--teal-dark); }
 .login-card h1 { text-align: center; margin: 6px 0 2px; font-size: 24px; color: var(--teal-deep); letter-spacing: .2px; }
 .login-card .sub { text-align: center; color: var(--muted); margin: 0 0 20px; font-size: 13.5px; }
 .login-foot { text-align: center; color: var(--muted); font-size: 12px; margin-top: 16px; }
+.login-foot.dev { margin-top: 6px; color: var(--teal-dark); }
+.side-foot b { color: #fff; }
 
 /* ===================== FORM ===================== */
 label.f { display: block; margin-bottom: 12px; }

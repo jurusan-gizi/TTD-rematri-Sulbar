@@ -1,4 +1,5 @@
 /* TTD Rematri Sulbar — PWA petugas gizi puskesmas
+ * Developed: Manjilala, S.Gz., M.Gizi
  * Database: Google Sheet via Apps Script (lihat apps-script/Code.gs)
  * Offline-first: semua perubahan disimpan di HP (IndexedDB) lalu dikirim saat online.
  */
@@ -328,6 +329,7 @@ function renderLogin(msg) {
     <div id="loginErr"></div>
     <button class="btn block" type="submit">Masuk</button>
     <p class="login-foot">Petugas Gizi Puskesmas · Admin Kabupaten/Kota · Admin Provinsi</p>
+    <p class="login-foot dev">Developed: <b>Manjilala, S.Gz., M.Gizi</b></p>
   </form></div>`;
   $('#fLogin').onsubmit = async e => {
     e.preventDefault();
@@ -394,7 +396,7 @@ function renderShell() {
         `<a href="#${n[0]}" data-p="${n[0]}">${ic(n[2])}<span>${esc(n[1])}</span>${n[0] === 'sinkron' ? '<span class="badge hidden" id="navPend"></span>' : ''}</a>`).join('')}
         <a href="#" id="btnLogout">${ic('logout')}<span>Keluar</span></a>
       </nav>
-      <div class="side-foot">Jurusan Gizi · Poltekkes Kemenkes Makassar<br>Data tersimpan aman di HP saat offline</div>
+      <div class="side-foot">Developed: <b>Manjilala, S.Gz., M.Gizi</b><br>Jurusan Gizi · Poltekkes Kemenkes Makassar</div>
     </aside>
     <div class="overlay" id="ovl"></div>
     <div class="main">
@@ -1022,6 +1024,7 @@ PAGES.panduan = v => {
     <li>Kumulatif s.d. bulan ini = kumulatif bulan lalu + bulan ini. Dihitung mulai <b>Juli</b> dan kembali ke nol setiap tahun ajaran baru.</li>
     <li>Rekap: jumlah rematri yang kumulatifnya <b>&lt; 26</b> dan <b>≥ 26</b> tablet, untuk "dapat" dan "minum".</li>
     <li>Minggu yang ditandai <b>libur</b> pada kalender sekolah tidak dihitung. Minggu V hanya muncul pada bulan yang diatur 5 minggu.</li></ul></div>
+  <div class="card"><h3>Tentang aplikasi</h3><p style="margin:0">TTD Rematri Sulbar · Developed: <b>Manjilala, S.Gz., M.Gizi</b> · Jurusan Gizi, Poltekkes Kemenkes Makassar.</p></div>
   <div class="card"><h3>Pasang di HP</h3><p style="margin:0">Buka aplikasi ini di Chrome → menu ⋮ → <b>Tambahkan ke layar utama / Instal aplikasi</b>. Setelah itu aplikasi bisa dibuka tanpa internet.</p></div>`;
 };
 

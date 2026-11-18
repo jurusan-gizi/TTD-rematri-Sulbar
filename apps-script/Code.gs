@@ -1,5 +1,6 @@
 /**
  * TTD Rematri Sulbar — Backend Google Apps Script
+ * Developed: Manjilala, S.Gz., M.Gizi
  * Database: Google Sheet (spreadsheet tempat script ini ditempel)
  *
  * Cara pasang singkat (lihat PANDUAN):
