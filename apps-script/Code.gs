@@ -103,6 +103,7 @@ function handle_(req) {
     case 'listUsers': return listUsers_(user);
     case 'saveUser': return saveUser_(user, req.user);
     case 'savePkm': return savePkm_(user, req.pkm);
+    case 'importPkm': return importPkm_(user, req.rows || [], !!req.buatAkun);
     case 'saveKalender': return saveKalender_(user, req.ta, req.rows);
     case 'setTA': return setTA_(user, req.ta);
     case 'rekapWilayah': return rekapWilayah_(user, req.ta, req.kab);
@@ -304,6 +305,82 @@ function savePkm_(user, data) {
     upsert_('Pkm', [row], function (ex) { return user.role === 'prov' || ex.kab === user.kab; });
   });
   return { pkm: readTable_('Pkm').rows.filter(function (p) { return p.del !== '1' && canSeePkm_(user, p); }) };
+}
+
+/**
+ * Import massal puskesmas (+ akun petugas opsional).
+ * rows: [{kab, nama, username, namaPetugas, pin}]
+ */
+function importPkm_(user, rows, buatAkun) {
+  if (user.role === 'pkm') throw new Error('Tidak berhak');
+  if (rows.length > 1000) throw new Error('Maksimal 1000 baris sekali import');
+  var kabIds = readTable_('Kab').rows.map(function (k) { return k.id; });
+  var hasil = [];
+  withLock_(function () {
+    var pkmAll = readTable_('Pkm').rows.filter(function (p) { return p.del !== '1'; });
+    var users = readTable_('Users').rows;
+    var userSet = {};
+    users.forEach(function (u) { userSet[u.username] = true; });
+    var pkmBaru = [], userBaru = [], now = nowIso_();
+    rows.forEach(function (r) {
+      var kab = user.role === 'kab' ? user.kab : String(r.kab || '');
+      var nama = String(r.nama || '').trim().replace(/\s+/g, ' ');
+      var out = { kab: kab, nama: nama, status: '', username: '', pin: '', namaPetugas: String(r.namaPetugas || '').trim() };
+      hasil.push(out);
+      if (!nama) { out.status = 'Dilewati: nama puskesmas kosong'; return; }
+      if (kabIds.indexOf(kab) < 0) { out.status = 'Dilewati: kabupaten/kota tidak dikenali'; return; }
+      var ada = pkmAll.concat(pkmBaru).filter(function (p) { return p.kab === kab && p.nama.toLowerCase() === nama.toLowerCase(); })[0];
+      var p = ada;
+      if (!p) {
+        p = { id: 'pkm_' + randomId_(8), kab: kab, nama: nama, del: '', updatedAt: now };
+        pkmBaru.push(p);
+        out.status = 'Puskesmas baru';
+      } else out.status = 'Puskesmas sudah ada';
+      var username = String(r.username || '').trim().toLowerCase();
+      if (!username && buatAkun) {
+        var sudahPunya = ada && users.concat(userBaru).some(function (u) { return u.role === 'pkm' && u.pkmId === p.id; });
+        if (sudahPunya) { out.status += ' · akun petugas sudah ada'; return; }
+        username = usernameDari_(nama, userSet);
+      }
+      if (!username) return;
+      if (!/^[a-z0-9._-]{4,30}$/.test(username)) { out.status += ' · akun dilewati: username tidak valid'; return; }
+      if (userSet[username]) { out.status += ' · akun ' + username + ' sudah ada'; out.username = username; return; }
+      var pin = String(r.pin || '').replace(/\D/g, '');
+      if (pin.length < 6) pin = pinAcak_();
+      var salt = randomId_(12);
+      userBaru.push({
+        username: username, nama: out.namaPetugas || ('Petugas Gizi ' + nama), role: 'pkm', kab: kab, pkmId: p.id,
+        hash: hashPin_(pin, salt), salt: salt, aktif: '1', mustChange: '1', updatedAt: now
+      });
+      userSet[username] = true;
+      out.username = username; out.pin = pin;
+      out.status += ' · akun dibuat';
+    });
+    appendRows_('Pkm', pkmBaru);
+    appendRows_('Users', userBaru);
+  });
+  return {
+    hasil: hasil,
+    pkm: readTable_('Pkm').rows.filter(function (p) { return p.del !== '1' && canSeePkm_(user, p); })
+  };
+}
+
+function usernameDari_(nama, userSet) {
+  var romawi = { i: '1', ii: '2', iii: '3', iv: '4', v: '5' };
+  var dasar = String(nama).toLowerCase()
+    .replace(/\b(uptd|upt|puskesmas|pkm|kecamatan)\b/g, ' ')
+    .replace(/\s(i{1,3}|iv|v)\s*$/, function (m, r) { return romawi[r]; })
+    .replace(/[^a-z0-9]+/g, '').slice(0, 20) || 'pkm';
+  var u = 'gizi.' + dasar, i = 2;
+  while (userSet[u]) u = 'gizi.' + dasar + i++;
+  return u;
+}
+
+function pinAcak_() {
+  var hex = Utilities.getUuid().replace(/\D/g, '') + Utilities.getUuid().replace(/\D/g, '');
+  var pin = hex.slice(0, 6);
+  while (pin.length < 6) pin += '7';
+  return pin;
 }
 
 function saveKalender_(user, ta, rows) {

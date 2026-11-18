@@ -48,7 +48,12 @@ Hosting lain (cPanel, Netlify, dll.) juga bisa, asalkan memakai **https**. PWA t
 2. Buka **Kalender & Tahun Ajaran**:
    - Pastikan tahun ajaran aktif sudah benar, mis. `2026/2027`.
    - Tandai bulan yang **5 minggu** dan **minggu libur** (misalnya libur semester). Pengaturan ini berlaku untuk semua sekolah.
-3. Buka **Puskesmas** dan tambahkan semua puskesmas per kabupaten/kota.
+3. Buka **Puskesmas** dan tambahkan semua puskesmas per kabupaten/kota. Ada dua cara:
+   - Satu per satu, lewat tombol **Tambah**.
+   - Sekaligus, lewat tombol **Import dari Excel** (kolom: Kabupaten/Kota, Nama Puskesmas; Username/Nama Petugas/PIN opsional).
+     - Centang *Buatkan akun petugas otomatis*: setiap puskesmas langsung dibuatkan akun, misalnya `gizi.tommo`, dengan PIN acak.
+     - Setelah import selesai, **unduh Daftar Akun (Excel)**. PIN awal hanya ditampilkan sekali.
+     - Import ulang file yang sama aman: puskesmas dan akun yang sudah ada tidak akan dobel.
 4. Buka **Akun Pengguna** dan buat akun:
    - **Admin Kabupaten/Kota**: satu akun per Dinkes kabupaten/kota.
    - **Petugas Gizi Puskesmas**: satu akun atau lebih per puskesmas.

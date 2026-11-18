@@ -1032,12 +1032,17 @@ PAGES.panduan = v => {
 PAGES.puskesmas = v => {
   const kabF = S.user.role === 'kab' ? S.user.kab : (S.ui.pkKab || '');
   const list = S.pkm.filter(p => !kabF || p.kab === kabF).sort((a, b) => (a.kab + a.nama).localeCompare(b.kab + b.nama));
-  v.innerHTML = `<div class="card"><h3>${ic('hosp')} Daftar puskesmas<button class="btn sm right" id="addPk">${ic('plus')} Tambah</button></h3>
+  v.innerHTML = `<div class="card"><h3>${ic('upload')} Import sekaligus dari Excel</h3>
+    <p class="small muted" style="margin-top:0">Upload file Excel/CSV berisi daftar puskesmas${S.user.role === 'prov' ? ' per kabupaten/kota' : ''}. Kolom minimal: <b>${S.user.role === 'prov' ? 'Kabupaten/Kota dan ' : ''}Nama Puskesmas</b>. Opsional: Username, Nama Petugas, PIN. Akun petugas bisa dibuatkan otomatis.</p>
+    <div style="display:flex;gap:8px;flex-wrap:wrap"><button class="btn" id="impPk">${ic('upload')} Import dari Excel</button><button class="btn ghost" id="tplPk">${ic('download')} Unduh template</button></div></div>
+  <div class="card"><h3>${ic('hosp')} Daftar puskesmas<button class="btn sm right" id="addPk">${ic('plus')} Tambah</button></h3>
     ${S.user.role === 'prov' ? `<div class="row"><label class="f"><span>Kabupaten/Kota</span><select class="inp" data-ui="pkKab"><option value="">Semua</option>${S.kab.map(k => `<option value="${k.id}" ${k.id === kabF ? 'selected' : ''}>${esc(k.nama)}</option>`).join('')}</select></label></div>` : ''}
     ${list.length ? `<div class="tbl-wrap"><table class="t list"><thead><tr><th class="l">Puskesmas</th><th class="l">Kabupaten/Kota</th><th></th></tr></thead><tbody>${list.map(p => `<tr><td>${esc(p.nama)}</td><td>${esc(namaKab(p.kab))}</td><td class="act"><button class="btn sm ghost" data-ed="${esc(p.id)}">Ubah</button> <button class="btn sm danger" data-del="${esc(p.id)}">Hapus</button></td></tr>`).join('')}</tbody></table></div>` : '<div class="empty">Belum ada puskesmas.</div>'}
     <p class="small muted">${list.length} puskesmas. Setelah puskesmas dibuat, buatkan akun petugasnya di menu <a href="#pengguna">Akun Pengguna</a>.</p></div>`;
   bindUi(v);
   $('#addPk').onclick = () => formPkm();
+  $('#impPk').onclick = () => wizardImportPkm();
+  $('#tplPk').onclick = () => runExport(exportTemplatePkm);
   $$('[data-ed]', v).forEach(b => b.onclick = () => formPkm(S.pkm.find(p => p.id === b.dataset.ed)));
   $$('[data-del]', v).forEach(b => b.onclick = async () => {
     const p = S.pkm.find(x => x.id === b.dataset.del);
@@ -1056,6 +1061,160 @@ function formPkm(row) {
       S.pkm = r.pkm; S.wil = null; persist(); toast('Tersimpan'); renderShell();
     }
   });
+}
+
+/* ---------- IMPORT PUSKESMAS MASSAL ---------- */
+function cocokKab(teksKab) {
+  const t = String(teksKab || '').toLowerCase().replace(/kabupaten|kab\.?|kota/g, ' ').replace(/\s+/g, ' ').trim();
+  if (!t) return '';
+  if (/tengah|mateng/.test(t)) return 'mateng';
+  if (/polewali|polman|mandar/.test(t)) return 'polman';
+  if (/pasangkayu|utara|matra/.test(t)) return 'pasangkayu';
+  if (/majene/.test(t)) return 'majene';
+  if (/mamasa/.test(t)) return 'mamasa';
+  if (/mamuju/.test(t)) return 'mamuju';
+  const k = S.kab.find(x => x.id === t || x.nama.toLowerCase().includes(t));
+  return k ? k.id : '';
+}
+function wizardImportPkm() {
+  const prov = S.user.role === 'prov';
+  const st = { tables: null, ti: 0, hdr: 0, map: {}, kabTetap: prov ? '' : S.user.kab, buatAkun: true };
+  const m = modal({
+    title: 'Import Puskesmas dari Excel', wide: true, ok: '', onOk: () => {},
+    body: `<div class="steps"><span class="on">1. Pilih file</span><span>2. Cocokkan kolom</span><span>3. Periksa &amp; simpan</span></div><div id="wz"></div>`
+  });
+  const wz = $('#wz', m), foot = $('.modal-f', m);
+  const steps = $$('.steps span', m);
+  const setStep = n => steps.forEach((s, i) => s.classList.toggle('on', i === n));
+  const tutup = () => m.parentNode.remove();
+
+  function step1() {
+    setStep(0);
+    foot.innerHTML = '<button type="button" class="btn ghost" id="bt">Batal</button>';
+    $('#bt', foot).onclick = tutup;
+    wz.innerHTML = `<label class="drop">${ic('upload')}<div><b>Pilih file Excel / CSV</b></div><div class="small muted">Satu baris = satu puskesmas. Satu file boleh berisi beberapa sheet (mis. per kabupaten).</div>
+      <input type="file" id="fileIn" accept=".xlsx,.xlsm,.csv,.txt,.docx,.xls" hidden></label>
+      <p class="small muted" style="text-align:center;margin:12px 0">— atau —</p>
+      <label class="f"><span>Tempel tabel dari Excel</span><textarea class="inp" id="paste" placeholder="Kabupaten/Kota&#9;Nama Puskesmas&#10;Mamuju&#9;Puskesmas Tommo"></textarea></label>
+      <button type="button" class="btn ghost" id="usePaste">Gunakan teks tempelan</button><div id="e1"></div>`;
+    $('#fileIn', wz).onchange = async e => {
+      const f = e.target.files[0]; if (!f) return;
+      $('#e1', wz).innerHTML = '<div class="loading"><span class="spinner dark"></span> Membaca file…</div>';
+      try { st.tables = await bacaFile(f); st.ti = 0; deteksi(); step2(); } catch (err) { $('#e1', wz).innerHTML = `<div class="alert err">${esc(err.message)}</div>`; }
+    };
+    $('#usePaste', wz).onclick = () => {
+      const rows = parseDelimited($('#paste', wz).value);
+      if (!rows.length) return ($('#e1', wz).innerHTML = '<div class="alert err">Teks tempelan masih kosong.</div>');
+      st.tables = [{ name: 'Teks tempelan', rows }]; st.ti = 0; deteksi(); step2();
+    };
+  }
+  function deteksi() {
+    const rows = st.tables[st.ti].rows;
+    st.hdr = -1;
+    st.hdr = barisJudul(rows, /puskesmas|pkm|nama|kab|kota|^no\.?$|user|pin|petugas|tpg/i);
+    const head = st.hdr >= 0 ? rows[st.hdr].map(teks) : [];
+    const find = (re, not) => head.findIndex(h => re.test(h) && !(not && not.test(h)));
+    st.map = {
+      kab: find(/kab|kota|wilayah/i),
+      nama: (() => { const a = find(/puskesmas|pkm|faskes/i, /user|petugas|kode|kepala|alamat/i); return a >= 0 ? a : find(/nama/i, /petugas|kepala|user/i); })(),
+      username: find(/user/i),
+      namaPetugas: find(/petugas|nutrisionis|tpg|pengelola/i, /user/i),
+      pin: find(/\bpin\b|password|sandi/i)
+    };
+    if (st.hdr < 0) st.map = { kab: prov ? 0 : -1, nama: prov ? 1 : 0, username: -1, namaPetugas: -1, pin: -1 };
+    if (st.map.nama < 0) st.map.nama = 0;
+  }
+  function step2() {
+    setStep(1);
+    const rows = st.tables[st.ti].rows;
+    const ncol = Math.max(...rows.slice(0, 50).map(r => r.length));
+    const head = st.hdr >= 0 ? rows[st.hdr].map(teks) : [];
+    const colOpt = (sel, wajib) => (wajib ? '' : '<option value="-1">— tidak ada —</option>') + Array.from({ length: ncol }, (_, i) => `<option value="${i}" ${i === sel ? 'selected' : ''}>Kolom ${String.fromCharCode(65 + i)}${head[i] ? ': ' + esc(head[i].slice(0, 30)) : ''}</option>`).join('');
+    const contoh = rows.slice(st.hdr + 1, st.hdr + 6);
+    wz.innerHTML = `
+      ${st.tables.length > 1 ? `<label class="f"><span>Sumber data</span><select class="inp" id="tSel">${st.tables.map((t, i) => `<option value="${i}" ${i === st.ti ? 'selected' : ''}>${esc(t.name)}</option>`).join('')}</select></label><p class="small muted" style="margin-top:-6px">File ini punya beberapa sheet. Import satu per satu, atau gabungkan dulu dalam satu sheet.</p>` : ''}
+      <label class="f"><span>Baris judul kolom</span><select class="inp" id="hSel"><option value="-1">Tidak ada judul</option>${rows.slice(0, 15).map((r, i) => `<option value="${i}" ${i === st.hdr ? 'selected' : ''}>Baris ${i + 1}: ${esc(r.map(teks).filter(Boolean).join(' | ').slice(0, 70))}</option>`).join('')}</select></label>
+      <div class="row">
+        <label class="f"><span>Nama puskesmas *</span><select class="inp" data-m="nama">${colOpt(st.map.nama, true)}</select></label>
+        ${prov ? `<label class="f"><span>Kabupaten/Kota</span><select class="inp" data-m="kab">${colOpt(st.map.kab)}</select></label>` : ''}
+      </div>
+      ${prov && st.map.kab < 0 ? `<label class="f"><span>Semua baris masuk ke kabupaten/kota</span><select class="inp" id="kabT"><option value="">— pilih —</option>${S.kab.map(k => `<option value="${k.id}" ${k.id === st.kabTetap ? 'selected' : ''}>${esc(k.nama)}</option>`).join('')}</select></label>` : ''}
+      <div class="row">
+        <label class="f"><span>Username petugas</span><select class="inp" data-m="username">${colOpt(st.map.username)}</select></label>
+        <label class="f"><span>Nama petugas</span><select class="inp" data-m="namaPetugas">${colOpt(st.map.namaPetugas)}</select></label>
+        <label class="f"><span>PIN awal</span><select class="inp" data-m="pin">${colOpt(st.map.pin)}</select></label>
+      </div>
+      <label class="chk" style="margin-bottom:12px"><input type="checkbox" id="ba" ${st.buatAkun ? 'checked' : ''}> Buatkan akun petugas otomatis bila username kosong (mis. <b>gizi.tommo</b>, PIN acak 6 angka)</label>
+      <p class="small muted" style="margin-bottom:6px">Contoh data:</p>
+      <div class="tbl-wrap" style="max-height:190px"><table class="t"><tbody>${contoh.map(r => `<tr>${Array.from({ length: ncol }, (_, i) => `<td class="l">${esc(teks(r[i]))}</td>`).join('')}</tr>`).join('')}</tbody></table></div><div id="e2"></div>`;
+    foot.innerHTML = '<button type="button" class="btn ghost" id="bk">Kembali</button><button type="button" class="btn" id="nx">Lanjut: periksa</button>';
+    $('#bk', foot).onclick = step1;
+    if ($('#tSel', wz)) $('#tSel', wz).onchange = e => { st.ti = +e.target.value; deteksi(); step2(); };
+    $('#hSel', wz).onchange = e => { st.hdr = +e.target.value; step2(); };
+    $$('[data-m]', wz).forEach(sl => sl.onchange = () => { st.map[sl.dataset.m] = +sl.value; if (sl.dataset.m === 'kab') step2(); });
+    if ($('#kabT', wz)) $('#kabT', wz).onchange = e => { st.kabTetap = e.target.value; };
+    $('#ba', wz).onchange = e => { st.buatAkun = e.target.checked; };
+    $('#nx', foot).onclick = () => {
+      if (prov && st.map.kab < 0 && !st.kabTetap) return ($('#e2', wz).innerHTML = '<div class="alert err">Tentukan kolom kabupaten/kota, atau pilih satu kabupaten untuk semua baris.</div>');
+      step3();
+    };
+  }
+  function step3() {
+    setStep(2);
+    const rows = st.tables[st.ti].rows.slice(st.hdr + 1);
+    const items = [];
+    const seen = new Set();
+    rows.forEach((r, i) => {
+      const nama = teks(r[st.map.nama]).replace(/\s+/g, ' ');
+      if (!nama || /^\d+$/.test(nama) || /^(jumlah|total)/i.test(nama)) return;
+      const kabTeks = prov && st.map.kab >= 0 ? teks(r[st.map.kab]) : '';
+      const kab = prov ? (st.map.kab >= 0 ? cocokKab(kabTeks) : st.kabTetap) : S.user.kab;
+      const it = {
+        baris: st.hdr + 2 + i, nama, kab, kabTeks,
+        username: st.map.username >= 0 ? teks(r[st.map.username]).toLowerCase() : '',
+        namaPetugas: st.map.namaPetugas >= 0 ? teks(r[st.map.namaPetugas]) : '',
+        pin: st.map.pin >= 0 ? teks(r[st.map.pin]).replace(/\D/g, '') : '', warn: [], skip: false
+      };
+      if (!kab) { it.warn.push(`kabupaten "${kabTeks || '-'}" tidak dikenali`); it.skip = true; }
+      const key = kab + '|' + nama.toLowerCase();
+      if (seen.has(key)) { it.warn.push('ganda di file'); it.skip = true; }
+      if (S.pkm.some(p => p.kab === kab && p.nama.toLowerCase() === nama.toLowerCase())) it.warn.push('sudah terdaftar (hanya akun yang dibuat)');
+      if (it.pin && it.pin.length < 6) { it.warn.push('PIN < 6 angka, dibuat acak'); it.pin = ''; }
+      seen.add(key);
+      items.push(it);
+    });
+    const ok = items.filter(x => !x.skip);
+    const perKab = {};
+    ok.forEach(x => { perKab[x.kab] = (perKab[x.kab] || 0) + 1; });
+    wz.innerHTML = `
+      <div class="stats"><div class="stat"><small>Siap diimport</small><b>${ok.length}</b><span>${Object.keys(perKab).map(k => esc(namaKab(k).replace('Kabupaten ', '')) + ': ' + perKab[k]).join(' · ')}</span></div>
+      <div class="stat"><small>Dilewati</small><b>${items.length - ok.length}</b></div>
+      <div class="stat"><small>Akun petugas</small><b>${ok.filter(x => x.username || st.buatAkun).length}</b><span>${st.buatAkun ? 'termasuk yang dibuat otomatis' : ''}</span></div></div>
+      <div class="tbl-wrap" style="max-height:330px"><table class="t list"><thead><tr><th>Baris</th><th class="l">Puskesmas</th><th class="l">Kabupaten/Kota</th><th class="l">Username</th><th class="l">Catatan</th></tr></thead><tbody>
+      ${items.map(x => `<tr style="${x.skip ? 'opacity:.55' : ''}"><td>${x.baris}</td><td>${esc(x.nama)}</td><td>${esc(x.kab ? namaKab(x.kab) : x.kabTeks)}</td><td>${esc(x.username || (st.buatAkun ? '(otomatis)' : '-'))}</td><td>${x.skip ? '<span class="pill err">dilewati</span> ' : ''}${x.warn.map(w => `<span class="pill warn">${esc(w)}</span>`).join(' ')}</td></tr>`).join('')}
+      </tbody></table></div><div id="e3"></div>`;
+    foot.innerHTML = `<button type="button" class="btn ghost" id="bk">Kembali</button><button type="button" class="btn" id="sv" ${ok.length ? '' : 'disabled'}>Import ${ok.length} puskesmas</button>`;
+    $('#bk', foot).onclick = step2;
+    $('#sv', foot).onclick = async () => {
+      const b = $('#sv', foot); b.disabled = true; b.innerHTML = '<span class="spinner"></span> Menyimpan…';
+      try {
+        const r = await api('importPkm', { rows: ok.map(x => ({ kab: x.kab, nama: x.nama, username: x.username, namaPetugas: x.namaPetugas, pin: x.pin })), buatAkun: st.buatAkun }, 180000);
+        S.pkm = r.pkm; S.wil = null; persist();
+        hasil(r.hasil);
+      } catch (e) { $('#e3', wz).innerHTML = `<div class="alert err">${esc(e.message)}</div>`; b.disabled = false; b.textContent = 'Coba lagi'; }
+    };
+  }
+  function hasil(rows) {
+    const akun = rows.filter(x => x.pin);
+    wz.innerHTML = `<div class="alert info">Import selesai: <b>${rows.filter(x => /baru/.test(x.status)).length}</b> puskesmas baru, <b>${akun.length}</b> akun petugas dibuat.</div>
+      ${akun.length ? '<div class="alert warn"><b>Penting:</b> PIN awal hanya ditampilkan sekali ini. Unduh daftar akun sekarang, lalu bagikan ke masing-masing petugas. PIN wajib diganti saat login pertama.</div>' : ''}
+      <div class="tbl-wrap" style="max-height:330px"><table class="t list"><thead><tr><th class="l">Puskesmas</th><th class="l">Kabupaten/Kota</th><th class="l">Username</th><th class="l">PIN awal</th><th class="l">Status</th></tr></thead><tbody>
+      ${rows.map(x => `<tr><td>${esc(x.nama)}</td><td>${esc(namaKab(x.kab))}</td><td><b>${esc(x.username || '-')}</b></td><td>${esc(x.pin || '-')}</td><td class="small">${esc(x.status)}</td></tr>`).join('')}</tbody></table></div>`;
+    foot.innerHTML = `${akun.length ? `<button type="button" class="btn" id="dlAk">${ic('download')} Unduh daftar akun (Excel)</button>` : ''}<button type="button" class="btn ghost" id="sl">Selesai</button>`;
+    if ($('#dlAk', foot)) $('#dlAk', foot).onclick = () => runExport(() => exportDaftarAkun(rows));
+    $('#sl', foot).onclick = () => { tutup(); renderShell(); };
+  }
+  step1();
 }
 
 /* ---------- ADMIN: PENGGUNA ---------- */
@@ -1256,6 +1415,17 @@ function parseTanggal(v) {
 }
 const teks = v => (v instanceof Date ? '' : String(v == null ? '' : v)).trim();
 
+/** Cari baris judul kolom: baris (≤15 pertama) dengan sel terisi ≥2 dan paling banyak kata kunci. */
+function barisJudul(rows, re) {
+  let best = -1, skor = 0;
+  for (let i = 0; i < Math.min(rows.length, 15); i++) {
+    const isi = rows[i].map(teks).filter(Boolean);
+    if (isi.length < 2) continue;
+    const n = isi.filter(c => re.test(c)).length;
+    if (n > skor) { skor = n; best = i; }
+  }
+  return best;
+}
 function wizardUpload(defaultSek) {
   const st = { tables: null, ti: 0, hdr: 0, map: {}, sek: defaultSek, kelasTetap: '', preview: null };
   const m = modal({
@@ -1295,7 +1465,7 @@ function wizardUpload(defaultSek) {
   function deteksi() {
     const rows = st.tables[st.ti].rows;
     st.hdr = -1;
-    for (let i = 0; i < Math.min(rows.length, 15); i++) if (rows[i].some(c => /nama/i.test(teks(c)))) { st.hdr = i; break; }
+    st.hdr = barisJudul(rows, /nama|nik|lahir|kelas|^no\.?$|rombel/i);
     const head = st.hdr >= 0 ? rows[st.hdr].map(teks) : [];
     const find = (re, not) => head.findIndex(h => re.test(h) && !(not && not.test(h)));
     st.map = {
@@ -1614,6 +1784,39 @@ async function exportTemplate() {
     .forEach((t, i) => { p.getCell(i + 1, 1).value = t; p.getCell(i + 1, 1).font = { bold: i === 0, size: i === 0 ? 12 : 11 }; });
   p.getColumn(1).width = 100;
   await unduhWb(wb, 'Template_Upload_Siswi_TTD_Rematri.xlsx');
+}
+
+async function exportTemplatePkm() {
+  const wb = new ExcelJS.Workbook();
+  const ws = wb.addWorksheet('Data Puskesmas');
+  ws.columns = [{ header: 'No', width: 5 }, { header: 'Kabupaten/Kota', width: 24 }, { header: 'Nama Puskesmas', width: 30 }, { header: 'Nama Petugas Gizi', width: 28 }, { header: 'Username (opsional)', width: 20 }, { header: 'PIN awal (opsional)', width: 18 }];
+  ws.getRow(1).eachCell(c => hdr(c));
+  ws.getColumn(6).numFmt = '@';
+  [[1, 'Mamuju', 'Puskesmas Tommo', 'Hasni, S.Gz', '', ''], [2, 'Majene', 'Puskesmas Banggae I', '', 'gizi.banggae1', '246810'], [3, 'Polewali Mandar', 'Puskesmas Wonomulyo', '', '', '']]
+    .forEach(r => { const row = ws.addRow(r); row.eachCell(c => boxCell(c, false)); row.font = { italic: true, color: { argb: 'FF888888' } }; });
+  const p = wb.addWorksheet('Petunjuk');
+  ['PETUNJUK', '1. Satu baris untuk satu puskesmas. Hapus baris contoh sebelum upload.', '2. Kabupaten/Kota cukup ditulis Majene, Polewali Mandar (Polman), Mamasa, Mamuju, Pasangkayu, atau Mamuju Tengah.',
+    '3. Username & PIN boleh dikosongkan — aplikasi bisa membuatkan otomatis (mis. gizi.tommo) dengan PIN acak 6 angka.', '4. Username: huruf kecil/angka/titik, 4–30 karakter. PIN minimal 6 angka.',
+    '5. Puskesmas yang sudah terdaftar tidak akan dobel.'].forEach((t, i) => { p.getCell(i + 1, 1).value = t; p.getCell(i + 1, 1).font = { bold: i === 0 }; });
+  p.getColumn(1).width = 110;
+  await unduhWb(wb, 'Template_Import_Puskesmas_TTD_Rematri.xlsx');
+}
+async function exportDaftarAkun(rows) {
+  const wb = new ExcelJS.Workbook();
+  const ws = wb.addWorksheet('Akun Petugas');
+  ws.mergeCells('A1:F1');
+  ws.getCell('A1').value = 'DAFTAR AKUN PETUGAS GIZI PUSKESMAS — TTD REMATRI SULBAR';
+  ws.getCell('A1').font = { bold: true, size: 13 };
+  ws.getCell('A2').value = 'Alamat aplikasi: ' + location.href.split('#')[0] + '   ·   PIN awal wajib diganti saat login pertama.';
+  ws.getCell('A2').font = { italic: true, size: 10 };
+  const head = ['No', 'Kabupaten/Kota', 'Puskesmas', 'Nama Petugas', 'Username', 'PIN awal'];
+  head.forEach((h, i) => { ws.getCell(4, i + 1).value = h; hdr(ws.getCell(4, i + 1)); });
+  rows.filter(x => x.username).forEach((x, i) => {
+    [i + 1, namaKab(x.kab), x.nama, x.namaPetugas || '', x.username, x.pin || '(sudah ada sebelumnya)'].forEach((v, j) => { const c = ws.getCell(5 + i, j + 1); c.value = v; boxCell(c, j > 0); });
+    ws.getCell(5 + i, 6).numFmt = '@';
+  });
+  [5, 24, 30, 26, 20, 18].forEach((w, i) => { ws.getColumn(i + 1).width = w; });
+  await unduhWb(wb, 'Daftar_Akun_Petugas_TTD_Rematri_Sulbar.xlsx');
 }
 
 /* ============================ INIT ============================ */
